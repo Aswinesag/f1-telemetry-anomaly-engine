@@ -52,19 +52,34 @@ class F1TelemetryProcessor:
         return self._inject_thermodynamic_features(processed_df)
 
     def _inject_thermodynamic_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Injects physics-informed constraints directly inside data matrices [3.2]."""
-        # Convert Speed metrics from km/h parameters down to SI units (m/s)
+        """Injects advanced aero and thermodynamic physics constraints."""
+        # 1. Base Kinematics
         df["Speed_ms"] = df["Speed"] / 3.6
-        
-        # Kinetic Energy Dissipation Proxy Evaluation Matrix [3.2]
         df["Delta_KE"] = df["Speed_ms"].pow(2).diff().fillna(0.0)
         
-        # Exponential Mechanical Work Estimation Module [3.2]
-        instantaneous_work = df["Brake"] * df["Speed_ms"]
-        df["Brake_Work_EMA"] = instantaneous_work.ewm(alpha=0.05, adjust=False).mean()
+        # Calculate acceleration using the configured time delta (e.g., 0.02s for 50Hz)
+        df["Acceleration"] = df["Speed_ms"].diff().fillna(0.0) / self.time_delta_step
+        df["Longitudinal_G"] = df["Acceleration"] / 9.81
         
-        # Establish structural synthetic training target matching volatile real-world behavior
-        df["Brake_Temp_Target"] = 180.0 + (df["Brake_Work_EMA"] * 1.8) - (df["Delta_KE"] * 0.4)
+        # 2. Aerodynamic Profiling (F1 Constants approximation)
+        df["Aero_Drag_N"] = 0.5 * 1.225 * (df["Speed_ms"] ** 2) * 1.15
+        df["Aero_Downforce_N"] = 0.5 * 1.225 * (df["Speed_ms"] ** 2) * 3.5
+        
+        # 3. Dynamic Vehicle Weight (Static Mass ~798kg + Aero Load)
+        df["Effective_Weight_N"] = (798 * 9.81) + df["Aero_Downforce_N"]
+        
+        # 4. Advanced Thermodynamics (Generation vs. Dissipation)
+        instantaneous_brake_work = df["Brake"] * df["Speed_ms"] * (df["Effective_Weight_N"] / 10000)
+        df["Brake_Work_EMA"] = instantaneous_brake_work.ewm(alpha=0.05, adjust=False).mean()
+        
+        # Convective cooling from airspeed through ducts
+        df["Convective_Cooling_Factor"] = (df["Speed_ms"] ** 0.8) * 0.05
+        
+        # 5. Synthesize the Ground Truth Target
+        base_temp = 180.0
+        heat_added = df["Brake_Work_EMA"] * 2.2
+        heat_extracted = df["Convective_Cooling_Factor"] * 1.5
+        df["Brake_Temp_Target"] = base_temp + heat_added - heat_extracted
         
         # Dynamic Scaling Sequence Preparation
         scaling_features = self.config["features"]["raw_channels"] + self.config["features"]["physics_engineered"]
