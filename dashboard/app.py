@@ -1,4 +1,5 @@
 import os
+import sys
 import yaml
 import torch
 import numpy as np
@@ -7,6 +8,14 @@ import streamlit as st
 import plotly.express as px
 from kafka import KafkaConsumer
 import json
+
+# 👇 FORCE PYTHON TO RECOGNISE THE PROJECT ROOT DIRECTORY
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
+
+# Now your relative package imports can safely execute below
+from src.models.virtual_sensor import HybridVirtualSensor
+from src.models.autoencoder import AnomalyAutoencoder
+
 
 # Ensure configuration values are locked down
 ST_CONFIG_PATH = "config/config.yaml"
