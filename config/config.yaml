@@ -1,0 +1,27 @@
+system:
+  target_frequency_hz: 50
+  cache_directory: "data/f1_cache"
+
+features:
+  raw_channels:
+    - "Speed"
+    - "Throttle"
+    - "Brake"
+    - "RPM"
+    - "Gear"
+  physics_engineered:
+    - "Delta_KE"
+    - "Brake_Work_EMA"
+  target_channel: "Brake_Temp_Target"
+
+model_hyperparameters:
+  sequence_length: 50
+  hidden_dimension: 64
+  batch_size: 64
+  learning_rate: 0.001
+  epochs: 10
+  dropout_rate: 0.2
+
+anomaly_detection:
+  mahalanobis_window: 150
+  initial_threshold: 3.5
