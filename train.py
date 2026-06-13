@@ -45,12 +45,18 @@ def execute_training_pipeline():
     os.makedirs("data/raw_samples", exist_ok=True)
     processed_df.to_csv("data/raw_samples/monza_ver_cleaned.csv", index=False)
     
-    # 3. Partition Sequences & Build Data Loaders
+    # 3. Partition Sequences & Build Data Loaders (FIX: Added Train/Val Split)
     seq_len = hyperparams["sequence_length"]
     dataset = F1TelemetryDataset(processed_df, feature_cols, target_col, sequence_length=seq_len)
     
+    # Implement an 80/20 chronological split to prevent threshold data leakage
+    split_idx = int(len(dataset) * 0.8)
+    train_dataset = torch.utils.data.Subset(dataset, range(0, split_idx))
+    val_dataset = torch.utils.data.Subset(dataset, range(split_idx, len(dataset)))
+    
     # Maintain chronological order for sequential validation (shuffle=False is mandatory)
-    train_loader = DataLoader(dataset, batch_size=hyperparams["batch_size"], shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=hyperparams["batch_size"], shuffle=False)
+    val_loader = DataLoader(val_dataset, batch_size=hyperparams["batch_size"], shuffle=False)
     
     # 4. Instantiate and Train the Hybrid Virtual Sensor Network
     print("\n[PHASE 2] Initialising Hybrid 1D-CNN + Bidirectional LSTM Model Architecture...")
@@ -85,20 +91,20 @@ def execute_training_pipeline():
     sensor_model_path = "data/virtual_sensor.pt"
     virtual_sensor.save_checkpoint(sensor_model_path, scalar_metadata={"scaler": processor.scaler})
     
-    # 5. Extract Residual footprint profile to seed the Isolation Engine
-    print("\n[PHASE 3] Generating residuals footprint matrix to train Isolation Engine...")
+    # 5. Extract Residual footprint profile to seed the Isolation Engine (FIX: Evaluated on Validation Data)
+    print("\n[PHASE 3] Generating residuals footprint matrix on unseen validation data...")
     virtual_sensor.eval()
-    all_residuals = []
+    val_residuals = []
     
     with torch.no_grad():
-        for batch_x, batch_y in train_loader:
+        for batch_x, batch_y in val_loader:
             batch_x = batch_x.to(device)
             preds = virtual_sensor(batch_x).squeeze()
             residual_deltas = torch.abs(batch_y.to(device) - preds)
-            all_residuals.append(residual_deltas.cpu().numpy())
+            val_residuals.append(residual_deltas.cpu().numpy())
             
     # Standardise residual matrix representation dimensions
-    residual_array = np.concatenate(all_residuals).reshape(-1, 1)
+    residual_array = np.concatenate(val_residuals).reshape(-1, 1)
     residual_tensor = torch.tensor(residual_array, dtype=torch.float32).to(device)
     
     # 6. Instantiate and Train the Autoencoder Engine
@@ -107,7 +113,7 @@ def execute_training_pipeline():
     ae_criterion = nn.MSELoss()
     
     autoencoder.train()
-    print("Training Anomaly Isolation Network on nominal residual distributions...")
+    print("Training Anomaly Isolation Network on nominal validation residual distributions...")
     for ae_epoch in range(15):
         ae_optimizer.zero_grad()
         reconstructed = autoencoder(residual_tensor)
@@ -117,10 +123,11 @@ def execute_training_pipeline():
         if (ae_epoch + 1) % 5 == 0:
             print(f"  • Autoencoder Epoch {ae_epoch+1:02d}/15 | Extraction Loss: {ae_loss.item():.6f}")
             
-    # Calculate adaptive safety threshold bounds based on maximum clean deviations
+    # FIX: Calculate adaptive safety threshold bounds driven by config YAML
     sample_losses, _ = autoencoder.calculate_reconstruction_loss(residual_tensor)
-    calculated_threshold = float(torch.mean(sample_losses).item() + (3.0 * torch.std(sample_losses).item()))
-    print(f"[THRESHOLD DETECTED] Dynamic Mahalanobis Alert Trigger Limit set at: {calculated_threshold:.6f}")
+    z_score_multiplier = config["anomaly_detection"].get("initial_threshold", 3.0)
+    calculated_threshold = float(torch.mean(sample_losses).item() + (z_score_multiplier * torch.std(sample_losses).item()))
+    print(f"[THRESHOLD DETECTED] Dynamic Alert Trigger Limit set at: {calculated_threshold:.6f} (Multiplier: {z_score_multiplier})")
     
     # Export Isolation Engine configurations
     ae_model_path = "data/isolation_engine.pt"
