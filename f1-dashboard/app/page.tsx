@@ -63,13 +63,13 @@ export default function F1PitwallDashboard() {
       </header>
 
       {/* CRITICAL ALERT BANNER */}
-      {currentStatus?.Is_Anomaly && (
+      {currentStatus?.Is_Anomaly === true && (
         <div className="mb-6 bg-red-900/50 border border-red-500 p-4 rounded-lg flex items-center gap-4 animate-pulse">
           <AlertTriangle className="w-8 h-8 text-red-500" />
           <div>
             <h3 className="text-xl font-bold text-red-400">CRITICAL SYSTEM ALARM</h3>
             <p className="text-red-200">
-              Anomaly score ({currentStatus.Anomaly_Score.toFixed(4)}) breaches background safety limits! Inspect physical brake ducts.
+              Anomaly score ({currentStatus?.Anomaly_Score?.toFixed(4) ?? 'N/A'}) breaches background safety limits!
             </p>
           </div>
         </div>
@@ -80,17 +80,17 @@ export default function F1PitwallDashboard() {
         <MetricCard 
           icon={<Gauge className="w-6 h-6 text-blue-400" />}
           title="Vehicle Velocity" 
-          value={`${currentStatus ? Math.round(currentStatus.Speed) : '--'} km/h`} 
+          value={`${currentStatus?.Speed ? Math.round(currentStatus.Speed) : '--'} km/h`} 
         />
         <MetricCard 
           icon={<AlertTriangle className="w-6 h-6 text-orange-400" />}
           title="Brake Application" 
-          value={`${currentStatus ? Math.round(currentStatus.Brake) : '--'} %`} 
+          value={`${currentStatus?.Brake ? Math.round(currentStatus.Brake) : '--'} %`} 
         />
         <MetricCard 
           icon={<Thermometer className="w-6 h-6 text-green-400" />}
           title="Virtual Thermal State" 
-          value={`${currentStatus ? currentStatus.Predicted_Temp.toFixed(1) : '--'} °C`} 
+          value={`${currentStatus?.Predicted_Temp ? currentStatus.Predicted_Temp.toFixed(1) : '--'} °C`} 
         />
         
         {/* Dynamic Health Card */}
@@ -103,7 +103,7 @@ export default function F1PitwallDashboard() {
             {currentStatus?.Is_Anomaly ? <span className="text-red-500">CRITICAL FAILURE</span> : <span className="text-emerald-500">NOMINAL</span>}
           </div>
           <div className="text-sm mt-1 text-neutral-500">
-            Score: {currentStatus ? currentStatus.Anomaly_Score.toFixed(4) : '--'}
+            Score: {currentStatus?.Anomaly_Score ? currentStatus.Anomaly_Score.toFixed(4) : '--'}
           </div>
         </div>
       </div>
