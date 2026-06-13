@@ -8,10 +8,16 @@ features:
     - "Throttle"
     - "Brake"
     - "RPM"
-    - "nGear"       # 👈 CHANGE THIS LINE FROM "Gear" TO "nGear"
+    - "nGear"
   physics_engineered:
     - "Delta_KE"
     - "Brake_Work_EMA"
+    - "Acceleration"             
+    - "Longitudinal_G"             
+    - "Aero_Drag_N"                
+    - "Aero_Downforce_N"          
+    - "Effective_Weight_N"    
+    - "Convective_Cooling_Factor"
   target_channel: "Brake_Temp_Target"
 
 model_hyperparameters:
