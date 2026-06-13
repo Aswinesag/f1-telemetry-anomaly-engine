@@ -67,7 +67,7 @@ def get_kafka_consumer():
         bootstrap_servers=kafka_broker,
         auto_offset_reset='latest',
         value_deserializer=lambda x: json.loads(x.decode('utf-8')),
-        consumer_timeout_ms=100  # Low timeout prevents the dashboard from freezing
+        consumer_timeout_ms=100  # Allows safe polling windows
     )
 
 consumer = get_kafka_consumer()
@@ -78,46 +78,61 @@ if "stream_buffer" not in st.session_state:
 if "ui_history" not in st.session_state:
     st.session_state.ui_history = pd.DataFrame(columns=["TimeSec", "Speed", "Brake", "Predicted_Temp", "Actual_Temp", "Anomaly_Score"])
 
-# 3. Create a single empty container wrapper to overwrite values dynamically
 placeholder = st.empty()
 
-# 4. Asynchronous Live Engine Consumption Loop
-while True:
+# 4. Asynchronous Live Engine Consumption Loop (FIX: Decoupled Features & Non-blocking Rerun)
+def process_kafka_stream():
     # Poll for any new packets waiting on the Kafka topic broker
-    raw_messages = consumer.poll(timeout_ms=50)
+    raw_messages = consumer.poll(timeout_ms=100)
     
     new_data_received = False
     for topic_partition, messages in raw_messages.items():
         for message in messages:
-            frame = message.value
-            st.session_state.stream_buffer.append(frame)
+            st.session_state.stream_buffer.append(message.value)
             new_data_received = True
 
-    # Limit baseline boundary queue allocation sizes to prevent memory creeping
+    # Limit baseline boundary queue allocation sizes
     if len(st.session_state.stream_buffer) > seq_len * 3:
         st.session_state.stream_buffer = st.session_state.stream_buffer[-seq_len*2:]
 
     # Run inference only when new metrics are buffered and sequence length matches requirements
     if new_data_received and len(st.session_state.stream_buffer) >= seq_len:
-        window_df = pd.DataFrame(st.session_state.stream_buffer[-seq_len:])
+        raw_window_df = pd.DataFrame(st.session_state.stream_buffer[-seq_len:])
+        
+        # FIX: On-the-fly Dynamic Feature Engineering for raw streaming data
+        raw_window_df["Speed_ms"] = raw_window_df["Speed"] / 3.6
+        raw_window_df["Delta_KE"] = raw_window_df["Speed_ms"].pow(2).diff().fillna(0.0)
+        instantaneous_work = raw_window_df["Brake"] * raw_window_df["Speed_ms"]
+        raw_window_df["Brake_Work_EMA"] = instantaneous_work.ewm(alpha=0.05, adjust=False).mean()
+        
+        # FIX: Ensure Target is generated for residual evaluation if missing from raw stream
+        if "Brake_Temp_Target" not in raw_window_df.columns:
+             raw_window_df["Brake_Temp_Target"] = 180.0 + (raw_window_df["Brake_Work_EMA"] * 1.8) - (raw_window_df["Delta_KE"] * 0.4)
+        
+        # Apply scaling dynamically using the trained MinMaxScaler
+        scaled_df = raw_window_df.copy()
+        scaling_features = system_config["features"]["raw_channels"] + system_config["features"]["physics_engineered"]
+        scaled_df[scaling_features] = scaler.transform(raw_window_df[scaling_features])
         
         # Format current matrix sequences into 3D structural inputs
-        input_tensor = torch.tensor(window_df[feature_cols].values, dtype=torch.float32).unsqueeze(0)
+        input_tensor = torch.tensor(scaled_df[feature_cols].values, dtype=torch.float32).unsqueeze(0)
         device = next(virtual_sensor.parameters()).device
         input_tensor = input_tensor.to(device)
         
         with torch.no_grad():
             pred_temp_scalar = virtual_sensor(input_tensor).item()
-            actual_temp_scalar = float(window_df.iloc[-1]["Brake_Temp_Target"])
+            actual_temp_scalar = float(raw_window_df.iloc[-1]["Brake_Temp_Target"])
             residual_error = np.abs(actual_temp_scalar - pred_temp_scalar)
             
             residual_tensor = torch.tensor([[residual_error]], dtype=torch.float32).to(device)
             anomaly_loss, _ = autoencoder.calculate_reconstruction_loss(residual_tensor)
             anomaly_score = anomaly_loss.item()
             
-        current_time = window_df.iloc[-1]["TimeSec"]
-        current_speed = window_df.iloc[-1]["Speed"] * 360  # Invert scaling configuration mapping
-        current_brake = window_df.iloc[-1]["Brake"] * 100
+        current_time = raw_window_df.iloc[-1]["TimeSec"]
+        
+        # FIX: Directly use true physical units extracted prior to transformation
+        current_speed = raw_window_df.iloc[-1]["Speed"] 
+        current_brake = raw_window_df.iloc[-1]["Brake"]
         is_anomaly = anomaly_score > alert_threshold
         
         new_row = pd.DataFrame([{
@@ -157,5 +172,7 @@ while True:
             fig_anomaly.update_layout(template="plotly_dark", height=280, margin=dict(l=20, r=20, t=40, b=20))
             st.plotly_chart(fig_anomaly, use_container_width=True)
 
-    # Microscopic sleep window keeps the processor cool and ensures smooth frame refreshes
-    time.sleep(0.01)
+# Process the active chunk and securely queue up the next UI refresh cycle
+process_kafka_stream()
+time.sleep(0.05)
+st.rerun()
