@@ -4,5 +4,7 @@ f1-dashboard/.git
 node_modules
 .git
 .github
+data/f1_cache
 __pycache__
+**/__pycache__
 *.pyc

@@ -21,11 +21,24 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
-  pitwall-dashboard:
-    build: .
+  inference-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
     depends_on:
       - kafka
     ports:
-      - "8502:8502"
+      - "8000:8000"
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+
+  pitwall-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_WS_URL: ws://localhost:8000/ws/telemetry
+    depends_on:
+      - inference-api
+    ports:
+      - "8502:8502"
