@@ -82,8 +82,8 @@ placeholder = st.empty()
 
 # 4. Asynchronous Live Engine Consumption Loop (FIX: Decoupled Features & Non-blocking Rerun)
 def process_kafka_stream():
-    # Poll for any new packets waiting on the Kafka topic broker
-    raw_messages = consumer.poll(timeout_ms=100)
+    # 1. INCREASE TIMEOUT: Let Kafka batch half a second of telemetry before moving on
+    raw_messages = consumer.poll(timeout_ms=500) 
     
     new_data_received = False
     for topic_partition, messages in raw_messages.items():
@@ -91,30 +91,24 @@ def process_kafka_stream():
             st.session_state.stream_buffer.append(message.value)
             new_data_received = True
 
-    # Limit baseline boundary queue allocation sizes
     if len(st.session_state.stream_buffer) > seq_len * 3:
         st.session_state.stream_buffer = st.session_state.stream_buffer[-seq_len*2:]
 
-    # Run inference only when new metrics are buffered and sequence length matches requirements
     if new_data_received and len(st.session_state.stream_buffer) >= seq_len:
         raw_window_df = pd.DataFrame(st.session_state.stream_buffer[-seq_len:])
         
-        # FIX: On-the-fly Dynamic Feature Engineering for raw streaming data
         raw_window_df["Speed_ms"] = raw_window_df["Speed"] / 3.6
         raw_window_df["Delta_KE"] = raw_window_df["Speed_ms"].pow(2).diff().fillna(0.0)
         instantaneous_work = raw_window_df["Brake"] * raw_window_df["Speed_ms"]
         raw_window_df["Brake_Work_EMA"] = instantaneous_work.ewm(alpha=0.05, adjust=False).mean()
         
-        # FIX: Ensure Target is generated for residual evaluation if missing from raw stream
         if "Brake_Temp_Target" not in raw_window_df.columns:
              raw_window_df["Brake_Temp_Target"] = 180.0 + (raw_window_df["Brake_Work_EMA"] * 1.8) - (raw_window_df["Delta_KE"] * 0.4)
         
-        # Apply scaling dynamically using the trained MinMaxScaler
         scaled_df = raw_window_df.copy()
         scaling_features = system_config["features"]["raw_channels"] + system_config["features"]["physics_engineered"]
         scaled_df[scaling_features] = scaler.transform(raw_window_df[scaling_features])
         
-        # Format current matrix sequences into 3D structural inputs
         input_tensor = torch.tensor(scaled_df[feature_cols].values, dtype=torch.float32).unsqueeze(0)
         device = next(virtual_sensor.parameters()).device
         input_tensor = input_tensor.to(device)
@@ -129,8 +123,6 @@ def process_kafka_stream():
             anomaly_score = anomaly_loss.item()
             
         current_time = raw_window_df.iloc[-1]["TimeSec"]
-        
-        # FIX: Directly use true physical units extracted prior to transformation
         current_speed = raw_window_df.iloc[-1]["Speed"] 
         current_brake = raw_window_df.iloc[-1]["Brake"]
         is_anomaly = anomaly_score > alert_threshold
@@ -141,7 +133,6 @@ def process_kafka_stream():
         }])
         st.session_state.ui_history = pd.concat([st.session_state.ui_history, new_row]).tail(100)
 
-        # 5. Non-Blocking Virtual Render Block Replacement
         with placeholder.container():
             metric_row = st.columns(4)
             metric_row[0].metric(label="🏎️ Vehicle Velocity", value=f"{int(current_speed)} km/h")
@@ -152,14 +143,15 @@ def process_kafka_stream():
             
             if is_anomaly:
                 st.error(f"⚠️ CRITICAL SYSTEM ALARM: Anomaly score ({anomaly_score:.4f}) breaches background threshold safety limits ({alert_threshold:.4f})! Inspect physical brake ducts.")
-                
+            
+            # 2. TURN OFF PLOTLY ANIMATIONS: Set transition duration to 0 to prevent internal renderer conflicts
             fig_thermal = px.line(
                 st.session_state.ui_history, x="TimeSec", y=["Actual_Temp", "Predicted_Temp"],
                 title="Live Performance Tracks: Real-time Sensors vs. AI Predictions",
                 labels={"value": "Celsius (°C)", "TimeSec": "Stint Timeline Offset (s)"},
                 color_discrete_map={"Actual_Temp": "#FF1801", "Predicted_Temp": "#00FF66"}
             )
-            fig_thermal.update_layout(template="plotly_dark", height=350, margin=dict(l=20, r=20, t=40, b=20))
+            fig_thermal.update_layout(template="plotly_dark", height=350, margin=dict(l=20, r=20, t=40, b=20), transition_duration=0)
             st.plotly_chart(fig_thermal, use_container_width=True)
             
             fig_anomaly = px.line(
@@ -169,10 +161,11 @@ def process_kafka_stream():
                 color_discrete_sequence=["#FFA500"]
             )
             fig_anomaly.add_hline(y=alert_threshold, line_dash="dash", line_color="red", annotation_text="Safety Threshold Boundary")
-            fig_anomaly.update_layout(template="plotly_dark", height=280, margin=dict(l=20, r=20, t=40, b=20))
+            fig_anomaly.update_layout(template="plotly_dark", height=280, margin=dict(l=20, r=20, t=40, b=20), transition_duration=0)
             st.plotly_chart(fig_anomaly, use_container_width=True)
 
-# Process the active chunk and securely queue up the next UI refresh cycle
 process_kafka_stream()
-time.sleep(0.05)
+
+# 3. THROTTLE REFRESH RATE: Sleep for 0.5s so Streamlit runs at a smooth, non-flickering 2 FPS
+time.sleep(0.5)
 st.rerun()
