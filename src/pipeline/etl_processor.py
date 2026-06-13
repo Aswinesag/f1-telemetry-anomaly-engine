@@ -9,7 +9,7 @@ from sklearn.preprocessing import MinMaxScaler
 class F1TelemetryProcessor:
     def __init__(self, config_path: str = "config/config.yaml"):
         with open(config_path, "r") as file:
-            self.config = yaml.safe_map_load(file)
+            self.config = yaml.safe_load(file)
             
         self.hz = self.config["system"]["target_frequency_hz"]
         self.time_delta_step = 1.0 / self.hz
