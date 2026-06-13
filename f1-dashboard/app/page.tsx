@@ -26,7 +26,8 @@ export default function F1PitwallDashboard() {
   useEffect(() => {
     // Mount the WebSocket connection to the inference backend
     // Assuming a FastAPI backend running on localhost:8000
-    wsRef.current = new WebSocket('ws://localhost:8000/ws/telemetry');
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:8000/ws/telemetry';
+    wsRef.current = new WebSocket(wsUrl);
 
     wsRef.current.onmessage = (event) => {
       const packet: TelemetryPacket = JSON.parse(event.data);
