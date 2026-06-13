@@ -44,67 +44,107 @@ feature_cols = system_config["features"]["raw_channels"] + system_config["featur
 @app.websocket("/ws/telemetry")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    
+
     consumer = KafkaConsumer(
         "f1-telemetry-bus",
         bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
-        auto_offset_reset='latest',
-        value_deserializer=lambda x: json.loads(x.decode('utf-8'))
+        auto_offset_reset="latest",
+        value_deserializer=lambda x: json.loads(x.decode('utf-8')),
     )
-    
-    stream_buffer = []
+
+    # --- Persistent state for streaming feature engineering (prevents EMA/DIFF reset “amnesia”) ---
+    prev_speed_ms: float | None = None
+    brake_work_ema: float | None = None
+
+    STREAM_WINDOW = seq_len
+    stream_buffer: list[dict] = []
+
+    # Match the backend’s EMA smoothing factor used previously
+    EMA_ALPHA = 0.05
 
     try:
         while True:
-            # Non-blocking poll
             raw_messages = consumer.poll(timeout_ms=100)
-            
-            for topic_partition, messages in raw_messages.items():
+
+            for _, messages in raw_messages.items():
                 for message in messages:
-                    stream_buffer.append(message.value)
-            
-            if len(stream_buffer) > seq_len * 2:
-                stream_buffer = stream_buffer[-seq_len:]
-                
-            if len(stream_buffer) == seq_len:
-                raw_window_df = pd.DataFrame(stream_buffer)
-                
-                # Dynamic Feature Engineering
-                raw_window_df["Speed_ms"] = raw_window_df["Speed"] / 3.6
-                raw_window_df["Delta_KE"] = raw_window_df["Speed_ms"].pow(2).diff().fillna(0.0)
-                raw_window_df["Brake_Work_EMA"] = (raw_window_df["Brake"] * raw_window_df["Speed_ms"]).ewm(alpha=0.05, adjust=False).mean()
-                
-                if "Brake_Temp_Target" not in raw_window_df.columns:
-                     raw_window_df["Brake_Temp_Target"] = 180.0 + (raw_window_df["Brake_Work_EMA"] * 1.8) - (raw_window_df["Delta_KE"] * 0.4)
-                
-                scaled_df = raw_window_df.copy()
-                scaling_features = system_config["features"]["raw_channels"] + system_config["features"]["physics_engineered"]
-                scaled_df[scaling_features] = scaler.transform(raw_window_df[scaling_features])
-                
-                input_tensor = torch.tensor(scaled_df[feature_cols].values, dtype=torch.float32).unsqueeze(0).to(device)
-                
-                with torch.no_grad():
-                    pred_temp = virtual_sensor(input_tensor).item()
-                    actual_temp = float(raw_window_df.iloc[-1]["Brake_Temp_Target"])
-                    anomaly_score, _ = autoencoder.calculate_reconstruction_loss(torch.tensor([[np.abs(actual_temp - pred_temp)]], dtype=torch.float32).to(device))
-                    anomaly_score = anomaly_score.item()
-                
-                # Push the cleanly formatted payload to the Next.js UI
-                payload = {
-                    "TimeSec": raw_window_df.iloc[-1]["TimeSec"],
-                    "Speed": raw_window_df.iloc[-1]["Speed"],
-                    "Brake": raw_window_df.iloc[-1]["Brake"],
-                    "Predicted_Temp": pred_temp,
-                    "Actual_Temp": actual_temp,
-                    "Anomaly_Score": anomaly_score,
-                    "Is_Anomaly": anomaly_score > alert_threshold
-                }
-                
-                await websocket.send_json(payload)
-                
-            await asyncio.sleep(0.05) # Yield control back to the event loop
+                    pkt = message.value
+
+                    # Compute streaming derived features for THIS packet only
+                    speed_ms = float(pkt["Speed"]) / 3.6
+
+                    # Delta_KE using persistent previous speed (instead of per-window .diff())
+                    # Delta KE = (v^2 - v_prev^2)
+                    if prev_speed_ms is None:
+                        delta_ke = 0.0
+                    else:
+                        delta_ke = (speed_ms**2) - (prev_speed_ms**2)
+
+                    prev_speed_ms = speed_ms
+
+                    # Brake_Work_EMA using persistent EMA state (instead of per-window .ewm())
+                    brake_val = float(pkt["Brake"])
+                    brake_work = brake_val * speed_ms
+                    if brake_work_ema is None:
+                        brake_work_ema = brake_work
+                    else:
+                        brake_work_ema = (EMA_ALPHA * brake_work) + (1.0 - EMA_ALPHA) * brake_work_ema
+
+                    # Attach derived features so the scaler gets exactly what the model expects
+                    pkt = dict(pkt)  # avoid mutating Kafka payload
+                    pkt["Speed_ms"] = speed_ms
+                    pkt["Delta_KE"] = delta_ke
+                    pkt["Brake_Work_EMA"] = brake_work_ema
+
+                    # If the target is missing from the incoming packet, reconstruct it consistently.
+                    # (Use the same formula you previously used, but based on persistent derived features.)
+                    if "Brake_Temp_Target" not in pkt:
+                        pkt["Brake_Temp_Target"] = 180.0 + (pkt["Brake_Work_EMA"] * 1.8) - (pkt["Delta_KE"] * 0.4)
+
+                    stream_buffer.append(pkt)
+
+                    # Strictly cap buffer to the last seq_len packets
+                    if len(stream_buffer) > STREAM_WINDOW:
+                        stream_buffer = stream_buffer[-STREAM_WINDOW:]
+
+                    # Run inference whenever we have a full window
+                    if len(stream_buffer) >= STREAM_WINDOW:
+                        raw_window_df = pd.DataFrame(stream_buffer[-STREAM_WINDOW:])
+
+                        # Scale only the features that were used in training
+                        scaling_features = system_config["features"]["raw_channels"] + system_config["features"]["physics_engineered"]
+                        scaled_df = raw_window_df.copy()
+                        scaled_df[scaling_features] = scaler.transform(raw_window_df[scaling_features])
+
+                        input_tensor = torch.tensor(
+                            scaled_df[feature_cols].values,
+                            dtype=torch.float32,
+                        ).unsqueeze(0).to(device)
+
+                        with torch.no_grad():
+                            pred_temp = virtual_sensor(input_tensor).item()
+                            actual_temp = float(raw_window_df.iloc[-1]["Brake_Temp_Target"])
+                            anomaly_score, _ = autoencoder.calculate_reconstruction_loss(
+                                torch.tensor([[np.abs(actual_temp - pred_temp)]], dtype=torch.float32).to(device)
+                            )
+                            anomaly_score = anomaly_score.item()
+
+                        payload = {
+                            "TimeSec": raw_window_df.iloc[-1]["TimeSec"],
+                            "Speed": raw_window_df.iloc[-1]["Speed"],
+                            "Brake": raw_window_df.iloc[-1]["Brake"],
+                            "Predicted_Temp": pred_temp,
+                            "Actual_Temp": actual_temp,
+                            "Anomaly_Score": anomaly_score,
+                            "Is_Anomaly": anomaly_score > alert_threshold,
+                        }
+
+                        await websocket.send_json(payload)
+
+            await asyncio.sleep(0.05)  # Yield control back to the event loop
 
     except Exception as e:
         print(f"WebSocket closed: {e}")
     finally:
         consumer.close()
+
