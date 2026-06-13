@@ -23,7 +23,7 @@ def bootstrap_neural_engines():
         config = yaml.safe_load(file)
         
     # Reconstruct networks using our saved checkpoint architectures
-    sensor_payload = torch.load(SENSOR_MODEL_PATH, map_location=device)
+    sensor_payload = torch.load(SENSOR_MODEL_PATH, map_location=device, weights_only=False) # 👈 ADD weights_only=False HERE
     from src.models.virtual_sensor import HybridVirtualSensor
     virtual_sensor = HybridVirtualSensor(
         input_dim=sensor_payload['input_dim'],
@@ -33,7 +33,8 @@ def bootstrap_neural_engines():
     virtual_sensor.load_state_dict(sensor_payload['state_dict'])
     virtual_sensor.to(device).eval()
     
-    ae_payload = torch.load(AE_MODEL_PATH, map_location=device)
+    ae_payload = torch.load(AE_MODEL_PATH, map_location=device, weights_only=False) # 👈 ADD weights_only=False HERE
+
     from src.models.autoencoder import AnomalyAutoencoder
     autoencoder = AnomalyAutoencoder(input_dim=1)
     autoencoder.load_state_dict(ae_payload['state_dict'])
