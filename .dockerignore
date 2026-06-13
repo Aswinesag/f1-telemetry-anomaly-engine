@@ -1,0 +1,8 @@
+f1-dashboard/node_modules
+f1-dashboard/.next
+f1-dashboard/.git
+node_modules
+.git
+.github
+__pycache__
+*.pyc

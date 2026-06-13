@@ -1,18 +1,17 @@
-FROM python:3.11-slim
+FROM node:22-alpine
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    software-properties-common \
-    && rm -rf /var/lib/apt/lists/*
+COPY f1-dashboard/package*.json ./
+RUN npm ci
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY f1-dashboard/ ./
+RUN npm run build
 
-COPY . .
+EXPOSE 3000
 
-EXPOSE 8501
+ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
 
-ENV PYTHONUNBUFFERED=1
+CMD ["npm", "start"]
