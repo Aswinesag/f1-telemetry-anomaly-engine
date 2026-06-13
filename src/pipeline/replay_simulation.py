@@ -3,6 +3,7 @@ import sys
 import yaml
 import pandas as pd
 import logging
+from kafka.errors import NoBrokersAvailable
 
 # Ensure the root directory is in the system path for clean imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
@@ -31,6 +32,7 @@ def run_live_replay():
     
     # 2. Extract environment variable if running inside Docker infrastructure
     kafka_broker = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    logging.info(f"Using Kafka bootstrap broker: {kafka_broker}")
     
     # 3. Instantiate the Kafka producer from ingestion.py
     try:
@@ -44,6 +46,13 @@ def run_live_replay():
         # Execute the streaming loop
         streamer.stream_dataframe(telemetry_df, dynamic_hertz=target_hz)
         
+    except NoBrokersAvailable:
+        logging.critical(
+            "Kafka broker is unavailable at %s. Start it with "
+            "'docker compose up -d zookeeper kafka' or restart stale broker state with "
+            "'docker compose restart zookeeper kafka'.",
+            kafka_broker,
+        )
     except Exception as e:
         logging.critical(f"Failed to execute Kafka telemetry streaming loop: {str(e)}")
 

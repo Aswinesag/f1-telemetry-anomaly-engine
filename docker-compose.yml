@@ -26,6 +26,6 @@ services:
     depends_on:
       - kafka
     ports:
-      - "3000:3000"
+      - "8502:8502"
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
