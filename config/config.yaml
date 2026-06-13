@@ -8,7 +8,7 @@ features:
     - "Throttle"
     - "Brake"
     - "RPM"
-    - "Gear"
+    - "nGear"       # 👈 CHANGE THIS LINE FROM "Gear" TO "nGear"
   physics_engineered:
     - "Delta_KE"
     - "Brake_Work_EMA"
