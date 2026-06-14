@@ -7,8 +7,11 @@ import pandas as pd
 import json
 import asyncio
 from fastapi import FastAPI, WebSocket
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from kafka import KafkaConsumer
+from kafka.admin import KafkaAdminClient
+from kafka.errors import KafkaError, NoBrokersAvailable
 
 # FORCE PYTHON TO RECOGNISE THE PROJECT ROOT DIRECTORY
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
@@ -57,6 +60,58 @@ alert_threshold = ae_payload['alert_threshold']
 seq_len = system_config["model_hyperparameters"]["sequence_length"]
 feature_cols = system_config["features"]["raw_channels"] + system_config["features"]["physics_engineered"]
 
+def get_kafka_bootstrap_servers() -> str:
+    return os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+
+def check_kafka_ready() -> tuple[bool, str | None]:
+    bootstrap_servers = get_kafka_bootstrap_servers()
+    admin_client = None
+
+    try:
+        admin_client = KafkaAdminClient(
+            bootstrap_servers=bootstrap_servers,
+            request_timeout_ms=3000,
+            api_version_auto_timeout_ms=3000,
+            client_id="inference-api-readiness",
+        )
+        admin_client.list_topics()
+        return True, None
+    except (NoBrokersAvailable, KafkaError, OSError) as exc:
+        return False, str(exc)
+    finally:
+        if admin_client is not None:
+            admin_client.close()
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "service": "inference-api",
+        "device": device,
+    }
+
+@app.get("/ready")
+def ready():
+    kafka_ready, kafka_error = check_kafka_ready()
+    models_ready = virtual_sensor is not None and autoencoder is not None and scaler is not None
+
+    payload = {
+        "status": "ready" if kafka_ready and models_ready else "not_ready",
+        "checks": {
+            "models": models_ready,
+            "kafka": kafka_ready,
+        },
+        "kafka_bootstrap_servers": get_kafka_bootstrap_servers(),
+    }
+
+    if kafka_error:
+        payload["kafka_error"] = kafka_error
+
+    if not kafka_ready or not models_ready:
+        return JSONResponse(status_code=503, content=payload)
+
+    return payload
+
 @app.websocket("/ws/telemetry")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -64,7 +119,7 @@ async def websocket_endpoint(websocket: WebSocket):
     
     consumer = KafkaConsumer(
         "f1-telemetry-bus",
-        bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+        bootstrap_servers=get_kafka_bootstrap_servers(),
         auto_offset_reset='latest',
         value_deserializer=lambda x: json.loads(x.decode('utf-8'))
     )
