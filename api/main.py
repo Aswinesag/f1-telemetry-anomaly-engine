@@ -59,6 +59,7 @@ scaler = sensor_payload['scalar_metadata']['scaler']
 alert_threshold = ae_payload['alert_threshold']
 seq_len = system_config["model_hyperparameters"]["sequence_length"]
 feature_cols = system_config["features"]["raw_channels"] + system_config["features"]["physics_engineered"]
+latest_telemetry_payload = None
 
 def get_kafka_bootstrap_servers() -> str:
     return os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
@@ -112,8 +113,22 @@ def ready():
 
     return payload
 
+@app.get("/telemetry/latest")
+def latest_telemetry():
+    if latest_telemetry_payload is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "status": "empty",
+                "message": "No telemetry has been processed yet.",
+            },
+        )
+
+    return latest_telemetry_payload
+
 @app.websocket("/ws/telemetry")
 async def websocket_endpoint(websocket: WebSocket):
+    global latest_telemetry_payload
     await websocket.accept()
     print("[WEBSOCKET] Client connected to live telemetry stream.")
     
@@ -201,6 +216,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "Alert_Threshold": alert_threshold,
                     "Is_Anomaly": anomaly_score > alert_threshold
                 }
+                latest_telemetry_payload = payload
                 
                 await websocket.send_json(payload)
                 
