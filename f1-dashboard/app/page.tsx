@@ -12,10 +12,10 @@ interface TelemetryPacket {
   Predicted_Temp: number;
   Actual_Temp: number;
   Anomaly_Score: number;
+  Alert_Threshold: number;
   Is_Anomaly: boolean;
 }
 
-const ALERT_THRESHOLD = 3.5; // Match your backend Mahalanobis calculation
 const MAX_HISTORY_LENGTH = 100;
 
 export default function F1PitwallDashboard() {
@@ -106,6 +106,9 @@ export default function F1PitwallDashboard() {
           <div className="text-sm mt-1 text-neutral-500">
             Score: {currentStatus?.Anomaly_Score ? currentStatus.Anomaly_Score.toFixed(4) : '--'}
           </div>
+          <div className="text-sm mt-1 text-neutral-500">
+            Threshold: {currentStatus?.Alert_Threshold ? currentStatus.Alert_Threshold.toFixed(4) : '--'}
+          </div>
         </div>
       </div>
 
@@ -145,7 +148,9 @@ export default function F1PitwallDashboard() {
                   contentStyle={{ backgroundColor: '#171717', border: '1px solid #333', borderRadius: '8px' }}
                   labelStyle={{ color: '#aaa' }}
                 />
-                <ReferenceLine y={ALERT_THRESHOLD} stroke="#FF1801" strokeDasharray="3 3" label={{ position: 'top', value: 'Safety Boundary', fill: '#FF1801', fontSize: 12 }} />
+                {currentStatus?.Alert_Threshold !== undefined && (
+                  <ReferenceLine y={currentStatus.Alert_Threshold} stroke="#FF1801" strokeDasharray="3 3" label={{ position: 'top', value: `Safety Boundary ${currentStatus.Alert_Threshold.toFixed(2)}`, fill: '#FF1801', fontSize: 12 }} />
+                )}
                 <Line type="stepAfter" dataKey="Anomaly_Score" stroke="#FFA500" strokeWidth={2} dot={false} isAnimationActive={false} name="Loss Intensity" />
               </LineChart>
             </ResponsiveContainer>

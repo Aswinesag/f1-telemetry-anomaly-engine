@@ -198,6 +198,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "Predicted_Temp": pred_temp,
                     "Actual_Temp": actual_temp,
                     "Anomaly_Score": anomaly_score,
+                    "Alert_Threshold": alert_threshold,
                     "Is_Anomaly": anomaly_score > alert_threshold
                 }
                 
