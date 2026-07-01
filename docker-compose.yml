@@ -31,6 +31,32 @@ services:
       retries: 12
       start_period: 30s
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: f1_telemetry
+      POSTGRES_USER: f1_telemetry
+      POSTGRES_PASSWORD: f1_telemetry
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U f1_telemetry -d f1_telemetry"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   inference-api:
     build:
       context: .
@@ -38,10 +64,16 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "8000:8000"
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - DATABASE_URL=postgresql+asyncpg://f1_telemetry:f1_telemetry@postgres:5432/f1_telemetry
+      - REDIS_URL=redis://redis:6379/0
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=3).read()\""]
       interval: 10s
@@ -72,3 +104,6 @@ services:
         condition: service_healthy
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+
+volumes:
+  postgres_data:

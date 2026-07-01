@@ -33,17 +33,18 @@ def execute_training_pipeline():
     print("\n[PHASE 1] Extracting data from FastF1 and running Cubic Spline alignment...")
     processor = F1TelemetryProcessor()
     # Profiled on Monza (high-braking circuit) using Verstappen's baseline telemetry stint
-    processed_df = processor.process_session_telemetry(
+    replay_df = processor.process_session_telemetry(
         year=2023, 
         location="Monza", 
         session_type="R", 
         driver="VER"
     )
+    processed_df = processor.scale_features(replay_df)
     print(f"[DATA SUCCESS] Aligned Matrix Shape: {processed_df.shape}")
     
     # Save a local cache copy to act as the seed file for the Kafka live replayer
     os.makedirs("data/raw_samples", exist_ok=True)
-    processed_df.to_csv("data/raw_samples/monza_ver_cleaned.csv", index=False)
+    replay_df.to_csv("data/raw_samples/monza_ver_cleaned.csv", index=False)
     
     # 3. Partition Sequences & Build Data Loaders (FIX: Added Train/Val Split)
     seq_len = hyperparams["sequence_length"]

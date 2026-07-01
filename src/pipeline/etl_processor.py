@@ -1,10 +1,11 @@
-import os
 import yaml
 import numpy as np
 import pandas as pd
 import fastf1 as ff1
 from scipy.interpolate import CubicSpline
 from sklearn.preprocessing import MinMaxScaler
+
+from src.engine.physics import PhysicsConfig, PhysicsEngine
 
 class F1TelemetryProcessor:
     def __init__(self, config_path: str = "config/config.yaml"):
@@ -16,6 +17,9 @@ class F1TelemetryProcessor:
         
         ff1.Cache.enable_cache(self.config["system"]["cache_directory"])
         self.scaler = MinMaxScaler()
+        self.physics_engine = PhysicsEngine(
+            PhysicsConfig(sample_rate_hz=float(self.hz))
+        )
 
     def process_session_telemetry(self, year: int, location: str, session_type: str, driver: str) -> pd.DataFrame:
         """Loads F1 timing sheets and extracts continuous aligned telemetry arrays."""
@@ -49,40 +53,12 @@ class F1TelemetryProcessor:
         processed_df.index.name = "TimeSec"
         processed_df = processed_df.reset_index()
         
-        return self._inject_thermodynamic_features(processed_df)
+        return self.physics_engine.transform(processed_df, include_target=True)
 
-    def _inject_thermodynamic_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Injects advanced aero and thermodynamic physics constraints."""
-        # 1. Base Kinematics
-        df["Speed_ms"] = df["Speed"] / 3.6
-        df["Delta_KE"] = df["Speed_ms"].pow(2).diff().fillna(0.0)
-        
-        # Calculate acceleration using the configured time delta (e.g., 0.02s for 50Hz)
-        df["Acceleration"] = df["Speed_ms"].diff().fillna(0.0) / self.time_delta_step
-        df["Longitudinal_G"] = df["Acceleration"] / 9.81
-        
-        # 2. Aerodynamic Profiling (F1 Constants approximation)
-        df["Aero_Drag_N"] = 0.5 * 1.225 * (df["Speed_ms"] ** 2) * 1.15
-        df["Aero_Downforce_N"] = 0.5 * 1.225 * (df["Speed_ms"] ** 2) * 3.5
-        
-        # 3. Dynamic Vehicle Weight (Static Mass ~798kg + Aero Load)
-        df["Effective_Weight_N"] = (798 * 9.81) + df["Aero_Downforce_N"]
-        
-        # 4. Advanced Thermodynamics (Generation vs. Dissipation)
-        instantaneous_brake_work = df["Brake"] * df["Speed_ms"] * (df["Effective_Weight_N"] / 10000)
-        df["Brake_Work_EMA"] = instantaneous_brake_work.ewm(alpha=0.05, adjust=False).mean()
-        
-        # Convective cooling from airspeed through ducts
-        df["Convective_Cooling_Factor"] = (df["Speed_ms"] ** 0.8) * 0.05
-        
-        # 5. Synthesize the Ground Truth Target
-        base_temp = 180.0
-        heat_added = df["Brake_Work_EMA"] * 2.2
-        heat_extracted = df["Convective_Cooling_Factor"] * 1.5
-        df["Brake_Temp_Target"] = base_temp + heat_added - heat_extracted
-        
-        # Dynamic Scaling Sequence Preparation
+    def scale_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        scaled_df = df.copy(deep=True)
         scaling_features = self.config["features"]["raw_channels"] + self.config["features"]["physics_engineered"]
-        df[scaling_features] = self.scaler.fit_transform(df[scaling_features])
-        
-        return df
+        scaled_df[scaling_features] = self.scaler.fit_transform(
+            scaled_df[scaling_features]
+        )
+        return scaled_df
