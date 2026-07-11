@@ -13,7 +13,11 @@ The current implementation is built around a decoupled streaming architecture:
 
 #Demo
 
-[![Watch the video](https://img.youtube.com/vi/fgY7lYCCvCk/0.jpg)](https://www.youtube.com/watch?v=fgY7lYCCvCk)
+
+
+https://github.com/user-attachments/assets/ed0b3696-9afb-4ec1-83f8-ffb566635091
+
+
 
 ---
 
