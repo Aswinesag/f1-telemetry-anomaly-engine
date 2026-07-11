@@ -27,4 +27,4 @@ class TelemetryAccepted(BaseModel):
 class ServiceHealth(BaseModel):
     status: str
     service: str
-    device: str
+    device: str | None = None

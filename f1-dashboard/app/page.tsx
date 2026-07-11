@@ -34,8 +34,8 @@ export default function F1PitwallDashboard() {
 
   useEffect(() => {
     // Mount the WebSocket connection to the inference backend
-    // Assuming a FastAPI backend running on localhost:8000
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:8000/ws/telemetry';
+    // Assuming a FastAPI backend exposed on localhost:18080
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:18080/ws/telemetry';
 
     fetch(getTelemetrySnapshotUrl(wsUrl))
       .then((response) => (response.ok ? response.json() : null))

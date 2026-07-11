@@ -129,33 +129,50 @@ app.add_middleware(
 
 
 def get_worker(request: Request) -> InferenceWorker:
-    return cast(InferenceWorker, request.app.state.worker)
+    worker = getattr(request.app.state, "worker", None)
+    if worker is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Inference worker is not initialized.",
+        )
+    return cast(InferenceWorker, worker)
 
 
 def get_redis(request: Request) -> Redis:
-    return cast(Redis, request.app.state.redis)
+    redis_client = getattr(request.app.state, "redis", None)
+    if redis_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Redis client is not initialized.",
+        )
+    return cast(Redis, redis_client)
 
 
 @app.get("/health", response_model=ServiceHealth)
 async def health(request: Request) -> ServiceHealth:
-    worker = get_worker(request)
+    worker = getattr(request.app.state, "worker", None)
     return ServiceHealth(
         status="ok",
         service="inference-api",
-        device=worker.device,
+        device=worker.device if worker is not None else None,
     )
 
 
 @app.get("/ready")
 async def ready(request: Request) -> dict[str, Any]:
-    worker = get_worker(request)
-    redis_client = get_redis(request)
-    kafka_task = cast(asyncio.Task[None], request.app.state.kafka_task)
+    worker = getattr(request.app.state, "worker", None)
+    redis_client = getattr(request.app.state, "redis", None)
+    kafka_task = getattr(request.app.state, "kafka_task", None)
 
-    redis_ready = bool(await redis_client.ping())
+    try:
+        redis_ready = bool(redis_client is not None and await redis_client.ping())
+    except Exception:
+        LOGGER.exception("Redis readiness check failed")
+        redis_ready = False
+
     database_ready = await check_database_ready()
-    kafka_ready = not kafka_task.done()
-    worker_ready = worker.is_running
+    kafka_ready = kafka_task is not None and not kafka_task.done()
+    worker_ready = worker is not None and worker.is_running
     is_ready = redis_ready and database_ready and kafka_ready and worker_ready
 
     payload: dict[str, Any] = {
@@ -166,8 +183,12 @@ async def ready(request: Request) -> dict[str, Any]:
             "redis": redis_ready,
             "worker": worker_ready,
         },
-        "queue_depth": worker.queue_depth,
+        "queue_depth": worker.queue_depth if worker is not None else None,
     }
+    if kafka_task is not None and kafka_task.done():
+        kafka_error = kafka_task.exception()
+        if kafka_error is not None:
+            payload["checks"]["kafka_error"] = str(kafka_error)
     if not is_ready:
         raise HTTPException(status_code=503, detail=payload)
     return payload
@@ -201,7 +222,11 @@ async def latest_telemetry(request: Request) -> InferenceResult:
 @app.websocket("/ws/telemetry")
 async def websocket_telemetry(websocket: WebSocket) -> None:
     await websocket.accept()
-    worker = cast(InferenceWorker, websocket.app.state.worker)
+    worker = getattr(websocket.app.state, "worker", None)
+    if worker is None:
+        await websocket.close(code=1013)
+        return
+    worker = cast(InferenceWorker, worker)
     last_payload: str | None = None
 
     try:
