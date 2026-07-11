@@ -11,7 +11,7 @@ The current implementation is built around a decoupled streaming architecture:
 - **PostgreSQL** persists telemetry snapshots and anomaly scores through SQLAlchemy 2.0 async sessions.
 - **Next.js** renders the pitwall dashboard on port `8502`.
 
-#**Demo**
+# **Demo**
 
 
 
