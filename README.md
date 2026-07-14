@@ -16,6 +16,10 @@ The project is implemented as a production-style asynchronous stack:
 
 
 
+https://github.com/user-attachments/assets/c9aeb53b-4b3c-4545-9fdf-e1662188512e
+
+
+
 ---
 ## System Architecture
 
