@@ -1,22 +1,23 @@
 # F1 Telemetry Anomaly Engine
 
-Production-oriented telemetry pipeline for simulating high-frequency Formula 1 sensor streams, deriving physics-informed thermal features, running asynchronous ML inference, and visualizing anomaly signatures on a pitwall-style dashboard.
+Real-time F1 telemetry intelligence system for streaming race data, generating physics-informed features, running virtual thermal sensing, detecting anomalies, explaining model decisions, tracking tire degradation, and comparing telemetry across cars.
 
-The current implementation is built around a decoupled streaming architecture:
+The project is implemented as a production-style asynchronous stack:
 
-- **Kafka** carries replayed telemetry frames.
-- **FastAPI** hosts health/readiness endpoints, ingestion, and WebSocket streaming.
-- **InferenceWorker** performs non-blocking model inference in the background.
-- **Redis** stores the latest processed inference result for low-latency dashboard reads.
-- **PostgreSQL** persists telemetry snapshots and anomaly scores through SQLAlchemy 2.0 async sessions.
+- **Kafka** transports high-frequency telemetry frames.
+- **FastAPI** serves ingestion, health/readiness, WebSocket telemetry, and comparison APIs.
+- **InferenceWorker** runs model inference outside request handlers.
+- **PhysicsEngine** generates shared training/runtime features.
+- **Redis** stores the latest inference payload for low-latency dashboard reads.
+- **PostgreSQL** stores historical telemetry snapshots and model outputs.
 - **Next.js** renders the pitwall dashboard on port `8502`.
 
 ---
 
-## System Overview
+## System Architecture
 
 ```text
-FastF1 / CSV replay
+FastF1 / replay CSV
       |
       v
 Telemetry replay producer
@@ -28,15 +29,17 @@ Kafka topic: f1-telemetry-bus
 FastAPI inference-api
       |
       +--> async Kafka consumer
-      +--> bounded InferenceWorker queue
-      +--> vectorized PhysicsEngine feature generation
+      +--> bounded worker queue
+      +--> PhysicsEngine feature generation
       +--> PyTorch virtual thermal sensor
       +--> PyTorch anomaly autoencoder
+      +--> Captum XAI attribution
+      +--> tire degradation trend classification
       +--> Redis latest-result cache
       +--> PostgreSQL telemetry_snapshots table
       |
       v
-WebSocket / HTTP latest telemetry
+HTTP / WebSocket telemetry
       |
       v
 Next.js pitwall dashboard
@@ -44,26 +47,43 @@ Next.js pitwall dashboard
 
 ---
 
-## Implementation Status
+## Implemented Features
 
-### Completed
+- Async FastAPI service with `/health`, `/ready`, `/telemetry`, `/telemetry/latest`, `/ws/telemetry`, and multi-car comparison endpoints.
+- Kafka replay pipeline for historical telemetry playback.
+- Stateless vectorized physics engine shared by training and inference.
+- Tire dynamics features:
+  - `Wheel_Speed_ms`
+  - `Slip_Ratio`
+  - `Normal_Load_N`
+  - `Tire_Load_Factor`
+  - `Tire_Stress_Index`
+  - `Thermal_Decay_Indicator`
+  - `Calculated_Degradation_Index`
+  - `Sustained_Tire_Decay_Flag`
+- PyTorch virtual thermal sensor using 1D CNN + bidirectional LSTM.
+- PyTorch residual autoencoder for anomaly scoring.
+- Captum Integrated Gradients XAI attribution module.
+- Fault classification:
+  - `Nominal`
+  - `Mechanical Fault`
+  - `Tire Degradation`
+- SQLAlchemy 2.0 async persistence for telemetry snapshots.
+- Alembic migrations for schema evolution.
+- Redis-backed latest telemetry cache.
+- Multi-car comparison API using server-side `pandas.merge_asof`.
+- Next.js pitwall dashboard with:
+  - live telemetry cards
+  - anomaly/loss chart
+  - thermal waveform chart
+  - XAI explanation panel
+  - tire degradation panel
+  - reusable comparison chart component
+- Docker Compose orchestration for Kafka, ZooKeeper, Redis, PostgreSQL, API, dashboard, and replay.
 
-- Docker Compose orchestration for Kafka, ZooKeeper, Redis, PostgreSQL, FastAPI, dashboard, and optional replay.
-- Async FastAPI service with lifecycle-managed Kafka consumer, Redis client, DB engine, and inference worker.
-- `/health`, `/ready`, `/telemetry`, `/telemetry/latest`, and `/ws/telemetry` endpoints.
-- Stateless, reusable vectorized physics engine in `src/engine/physics.py`.
-- PyTorch virtual sensor model using 1D CNN + bidirectional LSTM.
-- PyTorch residual autoencoder for anomaly isolation.
-- SQLAlchemy 2.0 async persistence model for telemetry snapshots.
-- Redis-backed latest inference result for dashboard hydration and WebSocket updates.
-- Next.js + Tailwind + Recharts pitwall dashboard.
-- Docker runtime dependency split:
-  - `requirements-api.txt` for API inference.
-  - `requirements-replay.txt` for Kafka replay.
-  - `requirements.txt` for full local training/prototype tooling.
-- Host API port moved to `18080` because Windows commonly reserves port `8000`.
+---
 
-### Current Operating Ports
+## Operating Ports
 
 | Component | Host URL / Port | Container Port |
 |---|---:|---:|
@@ -74,195 +94,158 @@ Next.js pitwall dashboard
 | Redis | `localhost:6379` | `6379` |
 | ZooKeeper | `localhost:2181` | `2181` |
 
+The API is exposed on host port `18080` because Windows may reserve port `8000`.
+
 ---
 
 ## Repository Layout
 
 ```text
 .
+├── alembic/
+│   └── versions/
+│       ├── 20260714_0001_add_tire_degradation_fields.py
+│       └── 20260714_0002_add_multi_car_identity.py
 ├── api/
-│   ├── main.py                  # FastAPI app, lifespan, routes, Kafka consumer task
-│   ├── schemas.py               # Pydantic request/response schemas
-│   ├── worker.py                # Async inference worker, Redis latest cache, DB persistence
+│   ├── main.py
+│   ├── schemas.py
+│   ├── worker.py
 │   └── database/
-│       └── models.py            # SQLAlchemy 2.0 async engine/session and TelemetrySnapshot model
+│       └── models.py
 ├── config/
-│   └── config.yaml              # Sampling rate, feature columns, model hyperparameters, threshold config
+│   └── config.yaml
 ├── data/
-│   ├── virtual_sensor.pt        # Trained virtual thermal sensor checkpoint
-│   ├── isolation_engine.pt      # Trained anomaly autoencoder checkpoint
-│   └── raw_samples/             # Replay CSV generated by training
+│   ├── virtual_sensor.pt
+│   ├── isolation_engine.pt
+│   └── raw_samples/
 ├── f1-dashboard/
-│   └── app/
-│       ├── Dashboard.tsx        # Pitwall dashboard UI
-│       └── page.tsx             # Next.js route entry
+│   ├── app/
+│   │   ├── Dashboard.tsx
+│   │   └── page.tsx
+│   └── components/
+│       ├── ComparisonChart.tsx
+│       ├── ExplanationPanel.tsx
+│       └── TireDegradationPanel.tsx
 ├── src/
 │   ├── engine/
-│   │   └── physics.py           # Vectorized thermodynamic feature engine
+│   │   └── physics.py
+│   ├── ml/
+│   │   └── xai_engine.py
 │   ├── models/
-│   │   ├── virtual_sensor.py    # 1D CNN + BiLSTM virtual sensor
-│   │   └── autoencoder.py       # Residual reconstruction anomaly detector
+│   │   ├── autoencoder.py
+│   │   └── virtual_sensor.py
 │   └── pipeline/
-│       ├── etl_processor.py     # FastF1 extraction, alignment, scaling
-│       ├── ingestion.py         # Kafka producer/consumer helpers
-│       └── replay_simulation.py # CSV-to-Kafka replay simulator
+│       ├── etl_processor.py
+│       ├── ingestion.py
+│       └── replay_simulation.py
 ├── tests/
-│   └── test_physics.py          # Physics engine tests
+│   └── test_physics.py
+├── alembic.ini
 ├── docker-compose.yml
-├── Dockerfile                   # Next.js dashboard image
-├── Dockerfile.api               # FastAPI inference image
-├── Dockerfile.replay            # Telemetry replay image
-├── requirements.txt             # Full local training/prototype stack
-├── requirements-api.txt         # Runtime API dependencies with CPU Torch
-├── requirements-replay.txt      # Lightweight replay dependencies
-└── train.py                     # End-to-end training pipeline
+├── Dockerfile
+├── Dockerfile.api
+├── Dockerfile.replay
+├── requirements.txt
+├── requirements-api.txt
+├── requirements-replay.txt
+└── train.py
 ```
 
 ---
 
 ## Technical Stack
 
-### Backend / Streaming
+### Backend
 
-- **FastAPI** for async HTTP and WebSocket API.
-- **Uvicorn** ASGI runtime.
-- **aiokafka** for async Kafka consumption inside the API.
-- **kafka-python** for replay producer compatibility.
-- **Redis asyncio client** for low-latency latest-result storage.
+- **FastAPI** for async HTTP and WebSocket APIs.
+- **Uvicorn** for ASGI runtime.
+- **aiokafka** for async Kafka consumption.
+- **kafka-python** for replay producer support.
+- **Redis asyncio client** for latest-result caching.
 - **SQLAlchemy 2.0 Async** with **asyncpg** for PostgreSQL persistence.
-- **Pydantic** for typed telemetry request contracts.
+- **Alembic** for schema migrations.
+- **Pydantic** for API schemas.
 
-### Machine Learning / Data
+### Machine Learning
 
 - **PyTorch** for the virtual sensor and anomaly autoencoder.
-- **NumPy / Pandas** for vectorized feature generation.
-- **scikit-learn MinMaxScaler** stored with the virtual sensor checkpoint.
-- **FastF1** for historical F1 telemetry extraction in the training pipeline.
-- **SciPy CubicSpline** for telemetry resampling/alignment during training.
+- **Captum** for Integrated Gradients attribution.
+- **scikit-learn** for `MinMaxScaler` feature scaling.
+- **NumPy / Pandas** for vectorized physics math and comparison alignment.
+- **FastF1** for historical telemetry extraction.
+- **SciPy** for training-time resampling/interpolation.
 
 ### Frontend
 
-- **Next.js 16** with React.
-- **Tailwind CSS 4** for styling.
-- **Recharts** for responsive telemetry charts.
-- **lucide-react** for dashboard icons.
+- **Next.js 16**
+- **React**
+- **Tailwind CSS 4**
+- **Recharts**
+- **lucide-react**
 
 ### Infrastructure
 
-- **Docker Compose** for local multi-service orchestration.
-- **Confluent Kafka + ZooKeeper** for stream transport.
-- **PostgreSQL 16 Alpine** for telemetry snapshot storage.
-- **Redis 7 Alpine** for latest inference cache.
-- **CPU-only PyTorch wheel** in the API image to avoid large CUDA downloads.
+- **Docker Compose**
+- **Confluent Kafka + ZooKeeper**
+- **PostgreSQL 16 Alpine**
+- **Redis 7 Alpine**
+- **CPU-only PyTorch wheel** in the API image
 
 ---
 
-## Core Architecture Decisions
+## Physics Engine
 
-### 1. Decoupled Async Inference
-
-The API does not run heavy inference directly in route handlers. Incoming Kafka messages and optional HTTP telemetry posts are pushed into a bounded `asyncio.Queue`. The `InferenceWorker` consumes the queue, keeps a rolling sequence window, runs model inference in a background task, and writes the result to Redis/PostgreSQL.
-
-This keeps:
-
-- HTTP endpoints responsive.
-- WebSocket streaming independent from model execution.
-- Kafka ingestion isolated from dashboard reads.
-- Persistence failures contained inside worker logging instead of crashing the WebSocket.
-
-### 2. Redis as Latest-State Cache
-
-The dashboard usually needs the latest telemetry state, not a full DB query. The worker writes the latest inference payload to:
+Main file:
 
 ```text
-telemetry:inference:latest
+src/engine/physics.py
 ```
 
-The dashboard hydrates from:
+The `PhysicsEngine` is stateless and used by both training and live inference to avoid training-serving skew.
+
+Core generated features:
 
 ```text
-GET /telemetry/latest
+Speed_ms
+Delta_KE
+Acceleration
+Longitudinal_G
+Aero_Drag_N
+Aero_Downforce_N
+Effective_Weight_N
+Brake_Work_EMA
+Convective_Cooling_Factor
+Brake_Temp_Target
+Wheel_Speed_ms
+Slip_Ratio
+Normal_Load_N
+Tire_Load_Factor
+Tire_Stress_Index
+Thermal_Decay_Indicator
+Calculated_Degradation_Index
+Sustained_Tire_Decay_Flag
 ```
 
-Then it receives live updates from:
-
-```text
-ws://localhost:18080/ws/telemetry
-```
-
-### 3. PostgreSQL for Historical Snapshots
-
-Every processed inference result can be persisted as a `TelemetrySnapshot` row containing:
-
-- Raw telemetry snapshot.
-- Engineered physics snapshot.
-- Predicted thermal state.
-- Actual synthetic brake temperature target.
-- Anomaly score.
-- Backend model threshold.
-- Boolean anomaly flag.
-- Model version metadata.
-
-### 4. Shared Physics Engine
-
-`src/engine/physics.py` is intentionally stateless and importable by both:
-
-- `train.py` / ETL pipeline.
-- `api/worker.py` / live inference runtime.
-
-This avoids training-serving skew caused by duplicated feature formulas.
-
-### 5. Runtime Dependency Split
-
-The original full dependency file is too heavy for runtime containers. The project now separates dependencies:
-
-- `requirements.txt`: local training and full experimentation.
-- `requirements-api.txt`: API inference runtime with CPU-only Torch.
-- `requirements-replay.txt`: replay producer only.
-
----
-
-## Physics Feature Engineering
-
-The physics engine derives thermodynamic and vehicle-dynamics features using vectorized Pandas/NumPy operations:
-
-- `Speed_ms`
-- `Delta_KE`
-- `Acceleration`
-- `Longitudinal_G`
-- `Aero_Drag_N`
-- `Aero_Downforce_N`
-- `Effective_Weight_N`
-- `Brake_Work_EMA`
-- `Convective_Cooling_Factor`
-- `Brake_Temp_Target`
-
-Required raw telemetry columns:
+Required columns:
 
 ```text
 Speed, Brake
 ```
 
-Configured model feature columns:
+Optional tire inputs:
 
-```yaml
-raw_channels:
-  - Speed
-  - Throttle
-  - Brake
-  - RPM
-  - nGear
-
-physics_engineered:
-  - Delta_KE
-  - Brake_Work_EMA
-  - Acceleration
-  - Longitudinal_G
-  - Aero_Drag_N
-  - Aero_Downforce_N
-  - Effective_Weight_N
-  - Convective_Cooling_Factor
+```text
+WheelSpeed
+Wheel_Speed
+WheelSpeedFL
+WheelSpeedFR
+WheelSpeedRL
+WheelSpeedRR
+tire_compound
+stint_lap_number
 ```
+
+If wheel speed is not present, the engine falls back to vehicle speed, yielding zero slip ratio.
 
 ---
 
@@ -270,20 +253,24 @@ physics_engineered:
 
 ### Virtual Thermal Sensor
 
-Implemented in `src/models/virtual_sensor.py`.
-
-Model shape:
+Implemented in:
 
 ```text
-Input sequence
-  -> Conv1D feature extractor
+src/models/virtual_sensor.py
+```
+
+Architecture:
+
+```text
+Input feature sequence
+  -> Conv1D
   -> BatchNorm + ReLU + Dropout
   -> 2-layer bidirectional LSTM
   -> dense regressor head
-  -> predicted brake/thermal temperature
+  -> predicted thermal state
 ```
 
-The model predicts the synthetic target:
+Target:
 
 ```text
 Brake_Temp_Target
@@ -291,33 +278,131 @@ Brake_Temp_Target
 
 ### Anomaly Isolation Engine
 
-Implemented in `src/models/autoencoder.py`.
+Implemented in:
 
-The autoencoder is trained on residuals:
+```text
+src/models/autoencoder.py
+```
+
+The autoencoder operates on residuals:
 
 ```text
 abs(actual_temperature - predicted_temperature)
 ```
 
-At inference time:
+Inference:
 
 ```text
 anomaly_score = reconstruction_loss(residual)
 is_anomaly = anomaly_score > alert_threshold
 ```
 
-The threshold is computed during training from validation residual reconstruction losses:
+Threshold:
 
 ```text
-mean(losses) + z_score_multiplier * std(losses)
+mean(validation_losses) + initial_threshold * std(validation_losses)
 ```
 
-The multiplier is configured in:
+---
+
+## Explainable AI
+
+Main file:
+
+```text
+src/ml/xai_engine.py
+```
+
+`XAIEngine` wraps the autoencoder with Captum Integrated Gradients and returns normalized feature contribution scores.
+
+Explanation payload:
+
+```json
+{
+  "top_factor": "Thermal_Residual",
+  "importance_score": 1.0,
+  "fault_type": "Mechanical Fault",
+  "recommendation": "Inspect brake, cooling, and mechanical telemetry for a sudden fault signature.",
+  "feature_importance": {
+    "Thermal_Residual": 1.0
+  }
+}
+```
+
+XAI is skipped for low-score nominal frames by default. Override with:
+
+```text
+XAI_TRIGGER_THRESHOLD
+XAI_IG_STEPS
+```
+
+---
+
+## Tire Degradation
+
+Tire degradation is treated as a continuous trend, not a binary anomaly.
+
+Worker output fields:
+
+```text
+tire_compound
+stint_lap_number
+degradation_index
+degradation_trend
+fault_type
+```
+
+Classification rules use:
+
+- current `Calculated_Degradation_Index`
+- rolling degradation slope
+- sustained slip/load stress
+
+Config:
 
 ```yaml
 anomaly_detection:
-  initial_threshold: 3.5
+  degradation_slope_threshold: 0.0025
+  degradation_index_threshold: 0.15
 ```
+
+The default replay data is single-car and does not currently provide wheel-speed or compound columns, so tire degradation validates as `0.0` / `Nominal` unless richer telemetry is ingested.
+
+---
+
+## Multi-Car Comparison
+
+Endpoint:
+
+```text
+GET /telemetry/compare/{car_a}/{car_b}?session_id={id}
+```
+
+The API performs temporal alignment server-side using `pandas.merge_asof` with nearest-sample matching.
+
+Returned deltas include:
+
+```text
+speed
+predicted_temperature
+actual_temperature
+anomaly_score
+degradation_index
+```
+
+The comparison query is backed by the composite index:
+
+```text
+ix_telemetry_snapshots_session_car_time(session_id, car_id, time_sec)
+```
+
+The frontend component is:
+
+```text
+f1-dashboard/components/ComparisonChart.tsx
+```
+
+It is a reusable component. It will only show meaningful data after at least two distinct `car_id` values exist in the same `session_id`.
 
 ---
 
@@ -331,13 +416,14 @@ http://localhost:18080
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/health` | Liveness check. Returns API status even if dependencies are not ready. |
-| `GET` | `/ready` | Readiness check for Redis, DB, Kafka task, and worker. |
-| `POST` | `/telemetry` | Optional direct telemetry ingestion into the worker queue. |
-| `GET` | `/telemetry/latest` | Latest processed inference result from Redis. |
+| `GET` | `/health` | API liveness. |
+| `GET` | `/ready` | Redis, DB, Kafka task, and worker readiness. |
+| `POST` | `/telemetry` | Direct telemetry ingestion into worker queue. |
+| `GET` | `/telemetry/latest` | Latest processed inference payload from Redis. |
+| `GET` | `/telemetry/compare/{car_a}/{car_b}?session_id={id}` | Server-aligned multi-car comparison. |
 | `WS` | `/ws/telemetry` | Live dashboard telemetry stream. |
 
-Example telemetry payload:
+Telemetry input:
 
 ```json
 {
@@ -346,83 +432,137 @@ Example telemetry payload:
   "Throttle": 40.0,
   "Brake": 92.0,
   "RPM": 11200.0,
-  "nGear": 6
+  "nGear": 6,
+  "session_id": "monza-2023-race",
+  "car_id": "VER"
 }
 ```
 
-Example inference payload:
+Inference output:
 
 ```json
 {
-  "CapturedAt": "2026-07-12T10:20:30.000000+00:00",
-  "TimeSec": 85.2,
-  "Speed": 280.0,
-  "Brake": 92.0,
-  "Predicted_Temp": 203.4,
-  "Actual_Temp": 220.7,
-  "Anomaly_Score": 294.68,
-  "Alert_Threshold": 40783.31,
-  "Is_Anomaly": false
+  "CapturedAt": "2026-07-14T12:17:37.814753+00:00",
+  "TimeSec": 85.22,
+  "Speed": 311.91,
+  "Brake": 0.0,
+  "Predicted_Temp": 202.9,
+  "Actual_Temp": 177.3,
+  "Anomaly_Score": 607.62,
+  "Alert_Threshold": 40767.36,
+  "Is_Anomaly": false,
+  "anomaly_score": 607.62,
+  "tire_compound": null,
+  "stint_lap_number": null,
+  "degradation_index": 0.0,
+  "degradation_trend": 0.0,
+  "fault_type": "Nominal",
+  "explanation": null
+}
+```
+
+Comparison output:
+
+```json
+{
+  "session_id": "monza-2023-race",
+  "car_a": "VER",
+  "car_b": "HAM",
+  "alignment": {
+    "method": "merge_asof",
+    "direction": "nearest",
+    "tolerance_seconds": 0.25
+  },
+  "samples": [
+    {
+      "time_sec": 85.2,
+      "delta": {
+        "speed": 3.6,
+        "actual_temperature": 2.6,
+        "anomaly_score": -1.0,
+        "degradation_index": -0.1
+      }
+    }
+  ]
 }
 ```
 
 ---
 
-## Docker Compose Services
+## Database
 
-| Service | Purpose |
+Main model:
+
+```text
+api/database/models.py
+```
+
+Table:
+
+```text
+telemetry_snapshots
+```
+
+Important identity fields:
+
+```text
+session_id
+car_id
+time_sec
+```
+
+Migration command:
+
+```powershell
+docker compose run --rm inference-api alembic upgrade head
+```
+
+Current migrations:
+
+| Revision | Purpose |
 |---|---|
-| `zookeeper` | Kafka coordination. |
-| `kafka` | Telemetry event bus. |
-| `postgres` | Async persistence target. |
-| `redis` | Latest inference cache. |
-| `inference-api` | FastAPI runtime and model inference worker. |
-| `pitwall-dashboard` | Next.js dashboard. |
-| `telemetry-replay` | Optional profile service for CSV replay into Kafka. |
+| `20260714_0001` | Add tire degradation persistence fields. |
+| `20260714_0002` | Add multi-car identity fields and comparison index. |
+
+Check migration state:
+
+```powershell
+docker compose exec postgres psql -U f1_telemetry -d f1_telemetry -c "SELECT version_num FROM alembic_version;"
+```
 
 ---
 
 ## Quick Start
 
-### 1. Build and start core services
+### 1. Build and start services
 
 ```powershell
 docker compose up --build
 ```
 
-Open:
+### 2. Apply migrations
 
-```text
-http://localhost:8502
+```powershell
+docker compose run --rm inference-api alembic upgrade head
 ```
 
-Check API:
+### 3. Check API
 
 ```powershell
 curl http://localhost:18080/health
 curl http://localhost:18080/ready
 ```
 
-### 2. Replay telemetry into Kafka
+### 4. Open dashboard
 
-After the core stack is healthy:
+```text
+http://localhost:8502
+```
+
+### 5. Replay telemetry
 
 ```powershell
 docker compose --profile replay run --rm telemetry-replay
-```
-
-The dashboard only shows live metrics after telemetry has been processed. It can hydrate the most recent processed point from Redis via `/telemetry/latest`.
-
-### 3. Stop the stack
-
-```powershell
-docker compose down
-```
-
-To remove PostgreSQL volume data:
-
-```powershell
-docker compose down -v
 ```
 
 ---
@@ -431,21 +571,8 @@ docker compose down -v
 
 ### Backend
 
-Install full local dependencies:
-
 ```powershell
 pip install -r requirements.txt
-```
-
-Run the API locally:
-
-```powershell
-uvicorn api.main:app --host 0.0.0.0 --port 8000
-```
-
-If Windows blocks host port `8000`, use:
-
-```powershell
 uvicorn api.main:app --host 0.0.0.0 --port 18080
 ```
 
@@ -457,7 +584,7 @@ npm install
 npm run dev -- --hostname 127.0.0.1 -p 8502
 ```
 
-The dashboard expects:
+Dashboard WebSocket:
 
 ```text
 NEXT_PUBLIC_WS_URL=ws://localhost:18080/ws/telemetry
@@ -465,60 +592,40 @@ NEXT_PUBLIC_WS_URL=ws://localhost:18080/ws/telemetry
 
 ### Training
 
-Run the full training pipeline:
-
 ```powershell
 python train.py
 ```
 
-This will:
+Training saves:
 
-1. Pull historical telemetry through FastF1.
-2. Resample and align telemetry.
-3. Generate physics features.
-4. Train the virtual thermal sensor.
-5. Train the residual autoencoder.
-6. Save:
-   - `data/virtual_sensor.pt`
-   - `data/isolation_engine.pt`
-   - `data/raw_samples/monza_ver_cleaned.csv`
-
-### Replay without Docker
-
-Start Kafka first, then run:
-
-```powershell
-python src/pipeline/replay_simulation.py
-```
-
-For local host Kafka:
-
-```powershell
-$env:KAFKA_BOOTSTRAP_SERVERS="localhost:9092"
-python src/pipeline/replay_simulation.py
+```text
+data/virtual_sensor.pt
+data/isolation_engine.pt
+data/raw_samples/monza_ver_cleaned.csv
 ```
 
 ---
 
 ## Configuration
 
-Main configuration file:
+Main config:
 
 ```text
 config/config.yaml
 ```
 
-Important fields:
+Important keys:
 
-| Field | Purpose |
+| Key | Purpose |
 |---|---|
-| `system.target_frequency_hz` | Replay and model sampling frequency. |
-| `features.raw_channels` | Raw telemetry columns used by model. |
-| `features.physics_engineered` | Physics feature columns used by model. |
-| `features.target_channel` | Synthetic training target. |
-| `model_hyperparameters.sequence_length` | Rolling inference window size. |
-| `model_hyperparameters.hidden_dimension` | LSTM hidden size. |
-| `anomaly_detection.initial_threshold` | Z-score multiplier for threshold generation. |
+| `system.target_frequency_hz` | Replay/model frequency. |
+| `features.raw_channels` | Raw model inputs. |
+| `features.physics_engineered` | Physics-generated model inputs. |
+| `features.target_channel` | Training target. |
+| `model_hyperparameters.sequence_length` | Rolling model window size. |
+| `anomaly_detection.initial_threshold` | Autoencoder alert multiplier. |
+| `anomaly_detection.degradation_slope_threshold` | Tire degradation trend threshold. |
+| `anomaly_detection.degradation_index_threshold` | Tire degradation index threshold. |
 
 ---
 
@@ -529,11 +636,13 @@ Important fields:
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | API, replay |
 | `KAFKA_TELEMETRY_TOPIC` | `f1-telemetry-bus` | API |
 | `KAFKA_CONSUMER_GROUP` | `inference-api` | API |
-| `DATABASE_URL` | `postgresql+asyncpg://f1_telemetry:f1_telemetry@localhost:5432/f1_telemetry` | API |
+| `DATABASE_URL` | `postgresql+asyncpg://f1_telemetry:f1_telemetry@localhost:5432/f1_telemetry` | API, Alembic |
 | `REDIS_URL` | `redis://localhost:6379/0` | API |
 | `WEBSOCKET_POLL_SECONDS` | `0.05` | API |
 | `INFERENCE_QUEUE_MAX_SIZE` | `2000` | API |
-| `MODEL_VERSION` | `unknown` | API persistence |
+| `MODEL_VERSION` | `unknown` | DB persistence |
+| `XAI_TRIGGER_THRESHOLD` | model alert threshold | XAI |
+| `XAI_IG_STEPS` | `32` | XAI |
 | `NEXT_PUBLIC_WS_URL` | `ws://localhost:18080/ws/telemetry` | Dashboard |
 
 ---
@@ -543,19 +652,13 @@ Important fields:
 Backend syntax:
 
 ```powershell
-python -m py_compile api/main.py api/worker.py api/database/models.py api/schemas.py
+python -m py_compile api/main.py api/worker.py api/database/models.py api/schemas.py src/engine/physics.py src/ml/xai_engine.py
 ```
 
 Physics tests:
 
 ```powershell
 python -m pytest tests/test_physics.py -q
-```
-
-Docker Compose validation:
-
-```powershell
-docker compose config --quiet
 ```
 
 Dashboard:
@@ -566,13 +669,37 @@ npm run lint
 npm run build
 ```
 
+Compose:
+
+```powershell
+docker compose config --quiet
+```
+
+Database migration:
+
+```powershell
+docker compose run --rm inference-api alembic upgrade head
+```
+
+End-to-end smoke path:
+
+```text
+replay -> Kafka -> inference-api -> Redis -> WebSocket -> dashboard
+```
+
 ---
 
 ## Operational Notes
 
-### Windows port `8000`
+### Dashboard data behavior
 
-Some Windows setups reserve port `8000` in an excluded TCP range. This project exposes the API on host port `18080` while keeping container port `8000`.
+The dashboard needs processed telemetry. Start services, wait for readiness, then run replay.
+
+### Multi-car comparison behavior
+
+The default replay CSV is single-car. `ComparisonChart` requires two distinct `car_id` values under the same `session_id`. Until multi-car telemetry is ingested, the comparison endpoint may return no aligned samples.
+
+### Windows port reservations
 
 Check excluded ranges:
 
@@ -582,20 +709,11 @@ netsh interface ipv4 show excludedportrange protocol=tcp
 
 ### Docker image downloads
 
-The API image uses CPU-only PyTorch through `requirements-api.txt` to avoid large CUDA downloads. If builds stall at Torch download, check network/DNS access to:
+The API uses CPU-only PyTorch in `requirements-api.txt`. If builds stall, check access to:
 
 ```text
 download.pytorch.org
 ```
-
-### Dashboard data behavior
-
-The dashboard renders only after inference data exists. To produce data:
-
-1. Start Compose.
-2. Wait for Kafka/API readiness.
-3. Run the replay profile.
-4. Open `http://localhost:8502`.
 
 ### Git hygiene
 
@@ -608,10 +726,10 @@ Generated folders and local caches are ignored:
 - `data/f1_cache/`
 - SQLite cache files
 
-Model checkpoints and replay CSVs are not ignored by default because they are part of the current runnable prototype state.
+Model checkpoints and replay CSVs are currently retained because they make the prototype runnable.
 
 ---
 
 ## License
 
-This project is licensed under the MIT License. See `LICENSE.md`.
+MIT License. See `LICENSE.md`.
