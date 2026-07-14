@@ -4,17 +4,20 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from typing import Any, cast
 
 from aiokafka import AIOKafkaConsumer
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+import pandas as pd
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis
+from sqlalchemy import select
 
 from api.database.models import (
     AsyncSessionFactory,
+    TelemetrySnapshot,
     check_database_ready,
     close_database,
     init_database,
@@ -217,6 +220,154 @@ async def latest_telemetry(request: Request) -> InferenceResult:
             detail="No telemetry has been processed yet.",
         )
     return latest
+
+
+@app.get("/telemetry/compare/{car_a}/{car_b}", response_model=None)
+async def compare_telemetry(
+    car_a: str,
+    car_b: str,
+    session_id: str = Query(..., min_length=1),
+) -> dict[str, Any]:
+    async with AsyncSessionFactory() as session:
+        result = await session.execute(
+            select(
+                TelemetrySnapshot.car_id,
+                TelemetrySnapshot.time_sec,
+                TelemetrySnapshot.speed,
+                TelemetrySnapshot.predicted_temperature,
+                TelemetrySnapshot.actual_temperature,
+                TelemetrySnapshot.anomaly_score,
+                TelemetrySnapshot.calculated_degradation_index,
+            )
+            .where(
+                TelemetrySnapshot.session_id == session_id,
+                TelemetrySnapshot.car_id.in_((car_a, car_b)),
+            )
+            .order_by(TelemetrySnapshot.car_id, TelemetrySnapshot.time_sec)
+        )
+        rows = result.mappings().all()
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail="No telemetry snapshots found for comparison.",
+        )
+
+    payload = await asyncio.to_thread(
+        _build_comparison_payload,
+        rows,
+        car_a,
+        car_b,
+        session_id,
+    )
+    if not payload["samples"]:
+        raise HTTPException(
+            status_code=404,
+            detail="Both cars must have telemetry in the requested session.",
+        )
+    return payload
+
+
+def _build_comparison_payload(
+    rows: list[Mapping[str, Any]],
+    car_a: str,
+    car_b: str,
+    session_id: str,
+) -> dict[str, Any]:
+    frame = pd.DataFrame.from_records(rows)
+    car_a_frame = _comparison_car_frame(frame, car_a)
+    car_b_frame = _comparison_car_frame(frame, car_b)
+
+    if car_a_frame.empty or car_b_frame.empty:
+        return {
+            "session_id": session_id,
+            "car_a": car_a,
+            "car_b": car_b,
+            "samples": [],
+        }
+
+    aligned = pd.merge_asof(
+        car_a_frame,
+        car_b_frame,
+        on="time_sec",
+        direction="nearest",
+        tolerance=0.25,
+        suffixes=("_a", "_b"),
+    ).dropna(subset=["speed_b"])
+
+    aligned["speed_delta"] = aligned["speed_a"] - aligned["speed_b"]
+    aligned["predicted_temp_delta"] = (
+        aligned["predicted_temperature_a"] - aligned["predicted_temperature_b"]
+    )
+    aligned["actual_temp_delta"] = (
+        aligned["actual_temperature_a"] - aligned["actual_temperature_b"]
+    )
+    aligned["anomaly_score_delta"] = (
+        aligned["anomaly_score_a"] - aligned["anomaly_score_b"]
+    )
+    aligned["degradation_index_delta"] = (
+        aligned["calculated_degradation_index_a"].fillna(0.0)
+        - aligned["calculated_degradation_index_b"].fillna(0.0)
+    )
+
+    samples = [
+        {
+            "time_sec": float(row.time_sec),
+            "car_a": {
+                "car_id": car_a,
+                "speed": float(row.speed_a),
+                "predicted_temperature": float(row.predicted_temperature_a),
+                "actual_temperature": float(row.actual_temperature_a),
+                "anomaly_score": float(row.anomaly_score_a),
+                "degradation_index": _nullable_float(
+                    row.calculated_degradation_index_a
+                ),
+            },
+            "car_b": {
+                "car_id": car_b,
+                "speed": float(row.speed_b),
+                "predicted_temperature": float(row.predicted_temperature_b),
+                "actual_temperature": float(row.actual_temperature_b),
+                "anomaly_score": float(row.anomaly_score_b),
+                "degradation_index": _nullable_float(
+                    row.calculated_degradation_index_b
+                ),
+            },
+            "delta": {
+                "speed": float(row.speed_delta),
+                "predicted_temperature": float(row.predicted_temp_delta),
+                "actual_temperature": float(row.actual_temp_delta),
+                "anomaly_score": float(row.anomaly_score_delta),
+                "degradation_index": float(row.degradation_index_delta),
+            },
+        }
+        for row in aligned.itertuples(index=False)
+    ]
+
+    return {
+        "session_id": session_id,
+        "car_a": car_a,
+        "car_b": car_b,
+        "alignment": {
+            "method": "merge_asof",
+            "direction": "nearest",
+            "tolerance_seconds": 0.25,
+        },
+        "samples": samples,
+    }
+
+
+def _comparison_car_frame(frame: pd.DataFrame, car_id: str) -> pd.DataFrame:
+    car_frame = frame[frame["car_id"] == car_id].copy()
+    if car_frame.empty:
+        return car_frame
+    return car_frame.sort_values("time_sec").reset_index(drop=True)
+
+
+def _nullable_float(value: Any) -> float | None:
+    if pd.isna(value):
+        return None
+    return float(value)
 
 
 @app.websocket("/ws/telemetry")

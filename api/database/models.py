@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, func, text
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -29,11 +29,29 @@ class Base(DeclarativeBase):
 
 class TelemetrySnapshot(Base):
     __tablename__ = "telemetry_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_telemetry_snapshots_session_car_time",
+            "session_id",
+            "car_id",
+            "time_sec",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        default="default",
+    )
+    car_id: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="unknown",
     )
     captured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -89,6 +107,14 @@ class TelemetrySnapshot(Base):
     ) -> "TelemetrySnapshot":
         return cls(
             captured_at=datetime.fromisoformat(str(result["CapturedAt"])),
+            session_id=cls._extract_string(
+                result.get("session_id", raw_snapshot.get("session_id")),
+                default="default",
+            ),
+            car_id=cls._extract_string(
+                result.get("car_id", raw_snapshot.get("car_id", raw_snapshot.get("Driver"))),
+                default="unknown",
+            ),
             time_sec=float(result["TimeSec"]),
             speed=float(result["Speed"]),
             throttle=float(raw_snapshot.get("Throttle", 0.0)),
@@ -121,6 +147,12 @@ class TelemetrySnapshot(Base):
     def _optional_string(value: Any) -> str | None:
         if value is None or value == "":
             return None
+        return str(value)
+
+    @staticmethod
+    def _extract_string(value: Any, *, default: str) -> str:
+        if value is None or value == "":
+            return default
         return str(value)
 
     @staticmethod
