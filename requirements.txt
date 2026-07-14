@@ -8,6 +8,7 @@ scikit-learn==1.4.1.post1
 # Deep Learning Frameworks
 torch==2.2.1
 torchvision==0.17.1
+captum==0.7.0
 
 # Real-time Streaming & Inference API
 kafka-python==2.0.2

@@ -21,11 +21,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.database.models import TelemetrySnapshot
 from src.engine.physics import PhysicsConfig, PhysicsEngine
+from src.ml.xai_engine import FeatureImportance, XAIEngine
 from src.models.autoencoder import AnomalyAutoencoder
 from src.models.virtual_sensor import HybridVirtualSensor
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+class ExplanationResult(TypedDict):
+    top_factor: str
+    importance_score: float
+    feature_importance: dict[str, float]
 
 
 class InferenceResult(TypedDict):
@@ -38,6 +45,8 @@ class InferenceResult(TypedDict):
     Anomaly_Score: float
     Alert_Threshold: float
     Is_Anomaly: bool
+    anomaly_score: float
+    explanation: ExplanationResult | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +55,7 @@ class ModelArtifacts:
     autoencoder: AnomalyAutoencoder
     scaler: MinMaxScaler
     alert_threshold: float
+    autoencoder_input_dim: int
     sequence_length: int
     feature_columns: tuple[str, ...]
     scaling_columns: tuple[str, ...]
@@ -77,6 +87,10 @@ class InferenceWorker:
         )
         self._runner_task: asyncio.Task[None] | None = None
         self._model_version = model_version
+        self._xai_trigger_threshold = float(
+            os.getenv("XAI_TRIGGER_THRESHOLD", "0.5")
+        )
+        self._xai_engine = self._build_xai_engine()
 
     @classmethod
     async def create(
@@ -234,8 +248,97 @@ class InferenceWorker:
             "Anomaly_Score": anomaly_score,
             "Alert_Threshold": self._artifacts.alert_threshold,
             "Is_Anomaly": anomaly_score > self._artifacts.alert_threshold,
+            "anomaly_score": anomaly_score,
+            "explanation": self._get_explanation(
+                anomaly_score=anomaly_score,
+                residual_tensor=residual_tensor,
+                scaled_frame=scaled_frame,
+            ),
         }
         return result, latest_raw, latest_engineered
+
+    def _build_xai_engine(self) -> XAIEngine:
+        if self._artifacts.autoencoder_input_dim == len(
+            self._artifacts.feature_columns
+        ):
+            feature_names = self._artifacts.feature_columns
+        elif self._artifacts.autoencoder_input_dim == 1:
+            feature_names = ("Thermal_Residual",)
+        else:
+            feature_names = tuple(
+                f"Autoencoder_Input_{index}"
+                for index in range(self._artifacts.autoencoder_input_dim)
+            )
+
+        return XAIEngine(
+            self._artifacts.autoencoder,
+            feature_names=feature_names,
+            n_steps=int(os.getenv("XAI_IG_STEPS", "32")),
+        )
+
+    def _get_explanation(
+        self,
+        *,
+        anomaly_score: float,
+        residual_tensor: torch.Tensor,
+        scaled_frame: pd.DataFrame,
+    ) -> ExplanationResult | None:
+        if anomaly_score < 0.5 or anomaly_score < self._xai_trigger_threshold:
+            return None
+
+        try:
+            attribution_input = self._build_attribution_input(
+                residual_tensor=residual_tensor,
+                scaled_frame=scaled_frame,
+            )
+            feature_importance = self._xai_engine.get_feature_importance(
+                attribution_input
+            )
+        except Exception:
+            LOGGER.exception("XAI feature attribution failed")
+            return None
+
+        return self._summarize_feature_importance(feature_importance)
+
+    def _build_attribution_input(
+        self,
+        *,
+        residual_tensor: torch.Tensor,
+        scaled_frame: pd.DataFrame,
+    ) -> torch.Tensor:
+        if self._artifacts.autoencoder_input_dim == len(
+            self._artifacts.feature_columns
+        ):
+            return torch.as_tensor(
+                scaled_frame.iloc[-1][list(self._artifacts.feature_columns)].to_numpy(
+                    dtype=np.float32,
+                    copy=True,
+                ),
+                dtype=torch.float32,
+                device=self._artifacts.device,
+            ).unsqueeze(0)
+
+        return residual_tensor
+
+    @staticmethod
+    def _summarize_feature_importance(
+        feature_importance: FeatureImportance,
+    ) -> ExplanationResult | None:
+        if not feature_importance:
+            return None
+
+        top_factor, importance_score = max(
+            feature_importance.items(),
+            key=lambda item: item[1],
+        )
+        return {
+            "top_factor": top_factor,
+            "importance_score": float(importance_score),
+            "feature_importance": {
+                feature_name: float(score)
+                for feature_name, score in feature_importance.items()
+            },
+        }
 
     async def _persist_result(
         self,
@@ -295,6 +398,7 @@ class InferenceWorker:
             autoencoder=autoencoder,
             scaler=scaler,
             alert_threshold=float(anomaly_payload["alert_threshold"]),
+            autoencoder_input_dim=int(anomaly_payload["input_dim"]),
             sequence_length=int(config["model_hyperparameters"]["sequence_length"]),
             feature_columns=raw_columns + physics_columns,
             scaling_columns=raw_columns + physics_columns,

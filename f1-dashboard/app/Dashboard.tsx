@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
+import ExplanationPanel, { type AttributionExplanation } from "../components/ExplanationPanel";
 import {
   Area,
   AreaChart,
@@ -35,6 +36,8 @@ interface TelemetryPacket {
   Anomaly_Score: number;
   Alert_Threshold: number;
   Is_Anomaly: boolean;
+  anomaly_score?: number;
+  explanation?: AttributionExplanation | null;
 }
 
 interface MetricCardProps {
@@ -248,7 +251,16 @@ export default function Dashboard() {
             sublabel={`AI ${formatNumber(currentStatus?.Predicted_Temp, 1)}°C`}
           />
 
+          <ExplanationPanel
+            className="xl:col-span-2"
+            explanation={currentStatus?.explanation}
+            anomalyScore={currentStatus?.Anomaly_Score ?? currentStatus?.anomaly_score}
+            alertThreshold={currentStatus?.Alert_Threshold}
+            isAnomaly={Boolean(currentStatus?.Is_Anomaly)}
+          />
+
           <StatusTicker
+            className={currentStatus?.Is_Anomaly && currentStatus?.explanation ? "xl:col-span-2" : "xl:col-span-4"}
             streams={sensorStreams}
             isAnomaly={Boolean(currentStatus?.Is_Anomaly)}
             anomalyDelta={anomalyDelta}
@@ -388,14 +400,16 @@ function StatusTicker({
   isAnomaly,
   anomalyDelta,
   lastSync,
+  className = "xl:col-span-4",
 }: {
   streams: { name: string; value: number; max: number; active: boolean }[];
   isAnomaly: boolean;
   anomalyDelta: number | undefined;
   lastSync: string;
+  className?: string;
 }) {
   return (
-    <section className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 shadow-xl shadow-black/20 backdrop-blur xl:col-span-4">
+    <section className={`rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 shadow-xl shadow-black/20 backdrop-blur ${className}`}>
       <div className="mb-4 grid grid-cols-1 gap-3 border-b border-neutral-800 pb-4 md:grid-cols-[1fr_1fr_1fr]">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.28em] text-neutral-500">Sensor Stream Ticker</p>
