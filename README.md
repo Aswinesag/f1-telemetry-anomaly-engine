@@ -15,9 +15,6 @@ The project is implemented as a production-style asynchronous stack:
 # Demo
 
 
-# If you want to see a higher resolution video demo
-
-https://vimeo.com/1209867702?share=copy&fl=sv&fe=ci
 
 ---
 ## System Architecture
