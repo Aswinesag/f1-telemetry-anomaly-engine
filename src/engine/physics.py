@@ -21,6 +21,11 @@ class PhysicsConfig:
     base_brake_temperature_c: float = 180.0
     heat_gain_coefficient: float = 2.2
     heat_loss_coefficient: float = 1.5
+    tire_decay_window_samples: int = 25
+    tire_slip_threshold: float = 0.08
+    tire_load_factor_threshold: float = 1.15
+    tire_stress_ema_alpha: float = 0.08
+    tire_stress_scale: float = 10_000.0
 
     @property
     def sample_interval_seconds(self) -> float:
@@ -51,6 +56,7 @@ class PhysicsEngine:
         frame = self.compute_kinematics(frame, copy=False)
         frame = self.compute_aerodynamics(frame, copy=False)
         frame = self.compute_thermodynamics(frame, copy=False)
+        frame = self.calculate_tire_dynamics(frame, copy=False)
 
         if include_target:
             frame = self.synthesize_brake_temperature(frame, copy=False)
@@ -76,6 +82,65 @@ class PhysicsEngine:
         frame["Longitudinal_G"] = frame["Acceleration"].div(
             self._config.gravity_m_s2
         )
+        return frame
+
+    def calculate_tire_dynamics(
+        self,
+        telemetry: pd.DataFrame,
+        *,
+        copy: bool = True,
+    ) -> pd.DataFrame:
+        frame = telemetry.copy(deep=True) if copy else telemetry
+        if "Aero_Downforce_N" not in frame.columns:
+            frame = self.compute_aerodynamics(frame, copy=False)
+        if self._config.tire_decay_window_samples <= 0:
+            raise ValueError("tire_decay_window_samples must be greater than zero")
+
+        vehicle_speed_ms = self._get_vehicle_speed_ms(frame)
+        wheel_speed_ms = self._get_wheel_speed_ms(frame, vehicle_speed_ms)
+        static_weight_n = self._config.vehicle_mass_kg * self._config.gravity_m_s2
+        normal_load_n = static_weight_n + frame["Aero_Downforce_N"].astype("float64")
+
+        slip_ratio = np.divide(
+            wheel_speed_ms - vehicle_speed_ms,
+            vehicle_speed_ms,
+            out=np.zeros_like(vehicle_speed_ms, dtype="float64"),
+            where=np.abs(vehicle_speed_ms) > 1e-6,
+        )
+        abs_slip_ratio = np.abs(slip_ratio)
+        tire_load_factor = normal_load_n.div(static_weight_n)
+        tire_stress_index = (
+            abs_slip_ratio
+            * tire_load_factor
+            * normal_load_n.div(self._config.tire_stress_scale)
+        )
+        high_slip_load_event = (
+            (abs_slip_ratio >= self._config.tire_slip_threshold)
+            & (tire_load_factor >= self._config.tire_load_factor_threshold)
+        )
+        weighted_decay_event = tire_stress_index.where(
+            high_slip_load_event,
+            other=0.0,
+        )
+        rolling_decay = weighted_decay_event.rolling(
+            window=self._config.tire_decay_window_samples,
+            min_periods=1,
+        ).mean()
+        degradation_index = rolling_decay.ewm(
+            alpha=self._config.tire_stress_ema_alpha,
+            adjust=False,
+        ).mean()
+
+        frame["Wheel_Speed_ms"] = wheel_speed_ms
+        frame["Slip_Ratio"] = slip_ratio
+        frame["Normal_Load_N"] = normal_load_n
+        frame["Tire_Load_Factor"] = tire_load_factor
+        frame["Tire_Stress_Index"] = tire_stress_index
+        frame["Thermal_Decay_Indicator"] = rolling_decay
+        frame["Calculated_Degradation_Index"] = degradation_index
+        frame["Sustained_Tire_Decay_Flag"] = (
+            rolling_decay > 0.0
+        ).astype("bool")
         return frame
 
     def compute_aerodynamics(
@@ -154,3 +219,29 @@ class PhysicsEngine:
         if missing_columns:
             missing = ", ".join(sorted(missing_columns))
             raise ValueError(f"Telemetry is missing required columns: {missing}")
+
+    @staticmethod
+    def _get_vehicle_speed_ms(telemetry: pd.DataFrame) -> pd.Series:
+        if "Speed_ms" in telemetry.columns:
+            return telemetry["Speed_ms"].astype("float64")
+        return telemetry["Speed"].astype("float64").div(3.6)
+
+    @staticmethod
+    def _get_wheel_speed_ms(
+        telemetry: pd.DataFrame,
+        vehicle_speed_ms: pd.Series,
+    ) -> pd.Series:
+        if "WheelSpeed" in telemetry.columns:
+            return telemetry["WheelSpeed"].astype("float64").div(3.6)
+        if "Wheel_Speed" in telemetry.columns:
+            return telemetry["Wheel_Speed"].astype("float64").div(3.6)
+
+        wheel_speed_columns = [
+            column
+            for column in ("WheelSpeedFL", "WheelSpeedFR", "WheelSpeedRL", "WheelSpeedRR")
+            if column in telemetry.columns
+        ]
+        if wheel_speed_columns:
+            return telemetry[wheel_speed_columns].astype("float64").mean(axis=1).div(3.6)
+
+        return vehicle_speed_ms.copy(deep=True)

@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r requirements-api.txt
 COPY api ./api
 COPY src ./src
 COPY config ./config
+COPY alembic.ini ./alembic.ini
+COPY alembic ./alembic
 COPY data/virtual_sensor.pt data/virtual_sensor.pt
 COPY data/isolation_engine.pt data/isolation_engine.pt
 

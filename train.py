@@ -17,7 +17,7 @@ def load_system_config(config_path: str = "config/config.yaml") -> dict:
 
 def execute_training_pipeline():
     print("="*70)
-    print("🚀 INITIALISING FORMULA 1 VIRTUAL SENSOR & ISOLATION TRAINING ENGINE")
+    print("INITIALISING FORMULA 1 VIRTUAL SENSOR & ISOLATION TRAINING ENGINE")
     print("="*70)
     
     # 1. Load System Settings
@@ -86,7 +86,7 @@ def execute_training_pipeline():
             
             epoch_loss += loss.item()
             
-        print(f"  • Epoch {epoch+1:02d}/{hyperparams['epochs']} | Mean Trajectory MSE Loss: {epoch_loss/len(train_loader):.6f}")
+        print(f"  - Epoch {epoch+1:02d}/{hyperparams['epochs']} | Mean Trajectory MSE Loss: {epoch_loss/len(train_loader):.6f}")
         
     # Export Virtual Sensor weights along with scaling parameters
     sensor_model_path = "data/virtual_sensor.pt"
@@ -122,7 +122,7 @@ def execute_training_pipeline():
         ae_loss.backward()
         ae_optimizer.step()
         if (ae_epoch + 1) % 5 == 0:
-            print(f"  • Autoencoder Epoch {ae_epoch+1:02d}/15 | Extraction Loss: {ae_loss.item():.6f}")
+            print(f"  - Autoencoder Epoch {ae_epoch+1:02d}/15 | Extraction Loss: {ae_loss.item():.6f}")
             
     # FIX: Calculate adaptive safety threshold bounds driven by config YAML
     sample_losses, _ = autoencoder.calculate_reconstruction_loss(residual_tensor)
@@ -135,7 +135,7 @@ def execute_training_pipeline():
     autoencoder.save_model(ae_model_path, threshold_metadata=calculated_threshold)
     
     print("\n" + "="*70)
-    print("🎉 PIPELINE RUN COMPLETED: SYSTEM READY FOR LIVE PIPELINE DEPLOYMENT")
+    print("PIPELINE RUN COMPLETED: SYSTEM READY FOR LIVE PIPELINE DEPLOYMENT")
     print("="*70)
 
 if __name__ == "__main__":

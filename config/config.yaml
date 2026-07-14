@@ -18,6 +18,11 @@ features:
     - "Aero_Downforce_N"          
     - "Effective_Weight_N"    
     - "Convective_Cooling_Factor"
+    - "Slip_Ratio"
+    - "Normal_Load_N"
+    - "Tire_Stress_Index"
+    - "Thermal_Decay_Indicator"
+    - "Calculated_Degradation_Index"
   target_channel: "Brake_Temp_Target"
 
 model_hyperparameters:
@@ -31,3 +36,5 @@ model_hyperparameters:
 anomaly_detection:
   mahalanobis_window: 150
   initial_threshold: 3.5
+  degradation_slope_threshold: 0.0025
+  degradation_index_threshold: 0.15

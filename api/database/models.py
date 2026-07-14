@@ -46,6 +46,13 @@ class TelemetrySnapshot(Base):
     brake: Mapped[float] = mapped_column(Float, nullable=False)
     rpm: Mapped[float] = mapped_column(Float, nullable=False)
     gear: Mapped[int] = mapped_column(Integer, nullable=False)
+    tire_compound: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    stint_lap_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    calculated_degradation_index: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+        index=True,
+    )
     predicted_temperature: Mapped[float] = mapped_column(Float, nullable=False)
     actual_temperature: Mapped[float] = mapped_column(Float, nullable=False)
     anomaly_score: Mapped[float] = mapped_column(Float, nullable=False, index=True)
@@ -88,6 +95,18 @@ class TelemetrySnapshot(Base):
             brake=float(result["Brake"]),
             rpm=float(raw_snapshot.get("RPM", 0.0)),
             gear=int(raw_snapshot.get("nGear", 0)),
+            tire_compound=cls._optional_string(
+                result.get("tire_compound", raw_snapshot.get("tire_compound"))
+            ),
+            stint_lap_number=cls._optional_int(
+                result.get("stint_lap_number", raw_snapshot.get("stint_lap_number"))
+            ),
+            calculated_degradation_index=cls._optional_float(
+                result.get(
+                    "degradation_index",
+                    engineered_snapshot.get("Calculated_Degradation_Index"),
+                )
+            ),
             predicted_temperature=float(result["Predicted_Temp"]),
             actual_temperature=float(result["Actual_Temp"]),
             anomaly_score=float(result["Anomaly_Score"]),
@@ -97,6 +116,24 @@ class TelemetrySnapshot(Base):
             raw_snapshot=dict(raw_snapshot),
             engineered_snapshot=dict(engineered_snapshot),
         )
+
+    @staticmethod
+    def _optional_string(value: Any) -> str | None:
+        if value is None or value == "":
+            return None
+        return str(value)
+
+    @staticmethod
+    def _optional_int(value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        return int(value)
+
+    @staticmethod
+    def _optional_float(value: Any) -> float | None:
+        if value is None or value == "":
+            return None
+        return float(value)
 
 
 engine: AsyncEngine = create_async_engine(

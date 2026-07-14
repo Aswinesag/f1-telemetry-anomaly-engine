@@ -13,6 +13,7 @@ import {
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import ExplanationPanel, { type AttributionExplanation } from "../components/ExplanationPanel";
+import TireDegradationPanel from "../components/TireDegradationPanel";
 import {
   Area,
   AreaChart,
@@ -37,6 +38,11 @@ interface TelemetryPacket {
   Alert_Threshold: number;
   Is_Anomaly: boolean;
   anomaly_score?: number;
+  tire_compound?: string | null;
+  stint_lap_number?: number | null;
+  degradation_index?: number | null;
+  degradation_trend?: number | null;
+  fault_type?: string | null;
   explanation?: AttributionExplanation | null;
 }
 
@@ -249,6 +255,15 @@ export default function Dashboard() {
             tone={currentStatus?.Is_Anomaly ? "critical" : "nominal"}
             icon={<Thermometer className="size-5" />}
             sublabel={`AI ${formatNumber(currentStatus?.Predicted_Temp, 1)}°C`}
+          />
+
+          <TireDegradationPanel
+            className="xl:col-span-2"
+            tireCompound={currentStatus?.tire_compound}
+            stintLapNumber={currentStatus?.stint_lap_number}
+            degradationIndex={currentStatus?.degradation_index}
+            degradationTrend={currentStatus?.degradation_trend}
+            faultType={currentStatus?.fault_type}
           />
 
           <ExplanationPanel

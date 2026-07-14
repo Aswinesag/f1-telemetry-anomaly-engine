@@ -3,6 +3,8 @@
 export interface AttributionExplanation {
   top_factor: string;
   importance_score: number;
+  fault_type?: string;
+  recommendation?: string;
   feature_importance?: Record<string, number>;
 }
 
@@ -48,7 +50,7 @@ export default function ExplanationPanel({
           </h2>
         </div>
         <div className="rounded-full border border-red-500/40 bg-red-500/10 px-3 py-1 font-mono text-xs font-bold text-red-300">
-          XAI
+          {explanation.fault_type ?? "XAI"}
         </div>
       </div>
 
@@ -68,9 +70,9 @@ export default function ExplanationPanel({
 
       <p className="mt-4 text-sm leading-6 text-red-100/90">
         Attribution indicates <span className="font-semibold text-white">{topFactor}</span>{" "}
-        is the dominant contributor to the current anomaly signature. Prioritize
-        brake thermal load, cooling efficiency, and correlated telemetry channels
-        before the next stint decision.
+        is the dominant contributor to the current anomaly signature.{" "}
+        {explanation.recommendation ??
+          "Prioritize brake thermal load, cooling efficiency, and correlated telemetry channels before the next stint decision."}
       </p>
 
       <div className="mt-4 grid grid-cols-2 gap-3 font-mono text-xs uppercase tracking-[0.18em] text-red-200/80">

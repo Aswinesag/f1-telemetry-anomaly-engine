@@ -32,6 +32,8 @@ LOGGER = logging.getLogger(__name__)
 class ExplanationResult(TypedDict):
     top_factor: str
     importance_score: float
+    fault_type: str
+    recommendation: str
     feature_importance: dict[str, float]
 
 
@@ -46,6 +48,11 @@ class InferenceResult(TypedDict):
     Alert_Threshold: float
     Is_Anomaly: bool
     anomaly_score: float
+    tire_compound: str | None
+    stint_lap_number: int | None
+    degradation_index: float | None
+    degradation_trend: float | None
+    fault_type: str
     explanation: ExplanationResult | None
 
 
@@ -56,6 +63,8 @@ class ModelArtifacts:
     scaler: MinMaxScaler
     alert_threshold: float
     autoencoder_input_dim: int
+    degradation_slope_threshold: float
+    degradation_index_threshold: float
     sequence_length: int
     feature_columns: tuple[str, ...]
     scaling_columns: tuple[str, ...]
@@ -88,7 +97,7 @@ class InferenceWorker:
         self._runner_task: asyncio.Task[None] | None = None
         self._model_version = model_version
         self._xai_trigger_threshold = float(
-            os.getenv("XAI_TRIGGER_THRESHOLD", "0.5")
+            os.getenv("XAI_TRIGGER_THRESHOLD", str(artifacts.alert_threshold))
         )
         self._xai_engine = self._build_xai_engine()
 
@@ -238,6 +247,15 @@ class InferenceWorker:
         latest_engineered = self._to_json_mapping(
             engineered_frame.iloc[-1].to_dict()
         )
+        degradation_index = self._optional_float(
+            latest_engineered.get("Calculated_Degradation_Index")
+        )
+        degradation_trend = self._calculate_degradation_trend(engineered_frame)
+        fault_type = self._classify_fault_type(
+            anomaly_score=anomaly_score,
+            degradation_index=degradation_index,
+            degradation_trend=degradation_trend,
+        )
         result: InferenceResult = {
             "CapturedAt": datetime.now(UTC).isoformat(),
             "TimeSec": float(latest_raw["TimeSec"]),
@@ -249,8 +267,17 @@ class InferenceWorker:
             "Alert_Threshold": self._artifacts.alert_threshold,
             "Is_Anomaly": anomaly_score > self._artifacts.alert_threshold,
             "anomaly_score": anomaly_score,
+            "tire_compound": self._extract_tire_compound(latest_raw),
+            "stint_lap_number": self._extract_stint_lap_number(latest_raw),
+            "degradation_index": degradation_index,
+            "degradation_trend": degradation_trend,
+            "fault_type": fault_type,
             "explanation": self._get_explanation(
                 anomaly_score=anomaly_score,
+                fault_type=fault_type,
+                degradation_index=degradation_index,
+                degradation_trend=degradation_trend,
+                engineered_frame=engineered_frame,
                 residual_tensor=residual_tensor,
                 scaled_frame=scaled_frame,
             ),
@@ -280,9 +307,20 @@ class InferenceWorker:
         self,
         *,
         anomaly_score: float,
+        fault_type: str,
+        degradation_index: float | None,
+        degradation_trend: float | None,
+        engineered_frame: pd.DataFrame,
         residual_tensor: torch.Tensor,
         scaled_frame: pd.DataFrame,
     ) -> ExplanationResult | None:
+        if fault_type == "Tire Degradation":
+            return self._summarize_tire_degradation(
+                engineered_frame=engineered_frame,
+                degradation_index=degradation_index,
+                degradation_trend=degradation_trend,
+            )
+
         if anomaly_score < 0.5 or anomaly_score < self._xai_trigger_threshold:
             return None
 
@@ -298,7 +336,10 @@ class InferenceWorker:
             LOGGER.exception("XAI feature attribution failed")
             return None
 
-        return self._summarize_feature_importance(feature_importance)
+        return self._summarize_feature_importance(
+            feature_importance,
+            fault_type=fault_type,
+        )
 
     def _build_attribution_input(
         self,
@@ -323,6 +364,8 @@ class InferenceWorker:
     @staticmethod
     def _summarize_feature_importance(
         feature_importance: FeatureImportance,
+        *,
+        fault_type: str,
     ) -> ExplanationResult | None:
         if not feature_importance:
             return None
@@ -334,11 +377,148 @@ class InferenceWorker:
         return {
             "top_factor": top_factor,
             "importance_score": float(importance_score),
+            "fault_type": fault_type,
+            "recommendation": (
+                "Inspect brake, cooling, and mechanical telemetry for a sudden "
+                "fault signature."
+            ),
             "feature_importance": {
                 feature_name: float(score)
                 for feature_name, score in feature_importance.items()
             },
         }
+
+    def _classify_fault_type(
+        self,
+        *,
+        anomaly_score: float,
+        degradation_index: float | None,
+        degradation_trend: float | None,
+    ) -> str:
+        degradation_shift = (
+            degradation_trend is not None
+            and degradation_trend >= self._artifacts.degradation_slope_threshold
+        )
+        degradation_state = (
+            degradation_index is not None
+            and degradation_index >= self._artifacts.degradation_index_threshold
+        )
+
+        if degradation_shift or degradation_state:
+            return "Tire Degradation"
+        if anomaly_score > self._artifacts.alert_threshold:
+            return "Mechanical Fault"
+        return "Nominal"
+
+    def _calculate_degradation_trend(
+        self,
+        engineered_frame: pd.DataFrame,
+    ) -> float | None:
+        if "Calculated_Degradation_Index" not in engineered_frame.columns:
+            return None
+
+        degradation_series = (
+            engineered_frame["Calculated_Degradation_Index"]
+            .tail(self._artifacts.sequence_length)
+            .astype("float64")
+            .dropna()
+        )
+        if len(degradation_series) < 2:
+            return None
+
+        sample_index = np.arange(len(degradation_series), dtype=np.float64)
+        slope = np.polyfit(sample_index, degradation_series.to_numpy(), deg=1)[0]
+        return float(slope)
+
+    def _summarize_tire_degradation(
+        self,
+        *,
+        engineered_frame: pd.DataFrame,
+        degradation_index: float | None,
+        degradation_trend: float | None,
+    ) -> ExplanationResult:
+        candidate_features = (
+            "Calculated_Degradation_Index",
+            "Thermal_Decay_Indicator",
+            "Tire_Stress_Index",
+            "Slip_Ratio",
+            "Normal_Load_N",
+        )
+        scores: dict[str, float] = {}
+        for feature_name in candidate_features:
+            if feature_name not in engineered_frame.columns:
+                continue
+            series = engineered_frame[feature_name].tail(
+                self._artifacts.sequence_length
+            ).astype("float64")
+            latest_value = abs(float(series.iloc[-1])) if not series.empty else 0.0
+            trend_value = abs(self._series_slope(series))
+            scores[feature_name] = latest_value + trend_value
+
+        if not scores:
+            scores = {"Calculated_Degradation_Index": abs(degradation_index or 0.0)}
+
+        total_score = sum(scores.values())
+        if total_score > 0.0:
+            feature_importance = {
+                feature_name: score / total_score
+                for feature_name, score in scores.items()
+            }
+        else:
+            equal_score = 1.0 / len(scores)
+            feature_importance = {
+                feature_name: equal_score
+                for feature_name in scores
+            }
+
+        top_factor, importance_score = max(
+            feature_importance.items(),
+            key=lambda item: item[1],
+        )
+        trend = degradation_trend or 0.0
+        return {
+            "top_factor": top_factor,
+            "importance_score": float(importance_score),
+            "fault_type": "Tire Degradation",
+            "recommendation": (
+                "Manage slip and sustained tire load; reduce traction-zone "
+                f"stress. Degradation trend slope: {trend:.6f}."
+            ),
+            "feature_importance": {
+                feature_name: float(score)
+                for feature_name, score in feature_importance.items()
+            },
+        }
+
+    @staticmethod
+    def _series_slope(series: pd.Series) -> float:
+        clean_series = series.dropna()
+        if len(clean_series) < 2:
+            return 0.0
+        sample_index = np.arange(len(clean_series), dtype=np.float64)
+        return float(np.polyfit(sample_index, clean_series.to_numpy(), deg=1)[0])
+
+    @staticmethod
+    def _extract_tire_compound(snapshot: Mapping[str, Any]) -> str | None:
+        for key in ("tire_compound", "TireCompound", "Compound"):
+            value = snapshot.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return None
+
+    @staticmethod
+    def _extract_stint_lap_number(snapshot: Mapping[str, Any]) -> int | None:
+        for key in ("stint_lap_number", "StintLapNumber", "LapNumber", "Lap"):
+            value = snapshot.get(key)
+            if value not in (None, ""):
+                return int(value)
+        return None
+
+    @staticmethod
+    def _optional_float(value: Any) -> float | None:
+        if value in (None, ""):
+            return None
+        return float(value)
 
     async def _persist_result(
         self,
@@ -399,6 +579,18 @@ class InferenceWorker:
             scaler=scaler,
             alert_threshold=float(anomaly_payload["alert_threshold"]),
             autoencoder_input_dim=int(anomaly_payload["input_dim"]),
+            degradation_slope_threshold=float(
+                config["anomaly_detection"].get(
+                    "degradation_slope_threshold",
+                    0.0025,
+                )
+            ),
+            degradation_index_threshold=float(
+                config["anomaly_detection"].get(
+                    "degradation_index_threshold",
+                    0.15,
+                )
+            ),
             sequence_length=int(config["model_hyperparameters"]["sequence_length"]),
             feature_columns=raw_columns + physics_columns,
             scaling_columns=raw_columns + physics_columns,
