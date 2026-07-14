@@ -12,8 +12,14 @@ The project is implemented as a production-style asynchronous stack:
 - **PostgreSQL** stores historical telemetry snapshots and model outputs.
 - **Next.js** renders the pitwall dashboard on port `8502`.
 
----
+# Demo
 
+
+# If you want to see a higher resolution video demo
+
+https://vimeo.com/1209867702?share=copy&fl=sv&fe=ci
+
+---
 ## System Architecture
 
 ```text
