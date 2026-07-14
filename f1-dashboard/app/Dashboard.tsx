@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
+import ComparisonChart, { type ComparisonPayload } from "../components/ComparisonChart";
 import ExplanationPanel, { type AttributionExplanation } from "../components/ExplanationPanel";
 import TireDegradationPanel from "../components/TireDegradationPanel";
 import {
@@ -73,6 +74,29 @@ function getTelemetrySnapshotUrl(wsUrl: string) {
   return parsedUrl.toString();
 }
 
+function getTelemetryCompareUrl(wsUrl: string, carA: string, carB: string, sessionId: string) {
+  const parsedUrl = new URL(wsUrl);
+  parsedUrl.protocol = parsedUrl.protocol === "wss:" ? "https:" : "http:";
+  parsedUrl.pathname = `/telemetry/compare/${encodeURIComponent(carA)}/${encodeURIComponent(carB)}`;
+  parsedUrl.search = new URLSearchParams({ session_id: sessionId }).toString();
+  parsedUrl.hash = "";
+  return parsedUrl.toString();
+}
+
+function createEmptyComparisonPayload(sessionId: string, carA: string, carB: string): ComparisonPayload {
+  return {
+    session_id: sessionId,
+    car_a: carA,
+    car_b: carB,
+    alignment: {
+      method: "merge_asof",
+      direction: "nearest",
+      tolerance_seconds: 0.25,
+    },
+    samples: [],
+  };
+}
+
 function formatNumber(value: number | undefined, digits = 0) {
   if (value === undefined || Number.isNaN(value)) return "--";
   return value.toLocaleString("en-US", {
@@ -93,11 +117,17 @@ export default function Dashboard() {
   const [history, setHistory] = useState<TelemetryPacket[]>([]);
   const [currentStatus, setCurrentStatus] = useState<TelemetryPacket | null>(null);
   const [connectionState, setConnectionState] = useState<"connecting" | "live" | "offline">("connecting");
+  const [comparisonPayload, setComparisonPayload] = useState<ComparisonPayload | null>(null);
+  const [comparisonMessage, setComparisonMessage] = useState<string | null>("Loading comparative telemetry");
   const isMounted = useSyncExternalStore(subscribeToHydration, getClientSnapshot, getServerSnapshot);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:18080/ws/telemetry";
+    const compareCarA = process.env.NEXT_PUBLIC_COMPARE_CAR_A ?? "VER";
+    const compareCarB = process.env.NEXT_PUBLIC_COMPARE_CAR_B ?? "HAM";
+    const compareSessionId = process.env.NEXT_PUBLIC_COMPARE_SESSION_ID ?? "schema-smoke";
+    const emptyComparisonPayload = createEmptyComparisonPayload(compareSessionId, compareCarA, compareCarB);
 
     fetch(getTelemetrySnapshotUrl(wsUrl))
       .then((response) => (response.ok ? response.json() : null))
@@ -107,6 +137,26 @@ export default function Dashboard() {
         setHistory([packet]);
       })
       .catch(() => undefined);
+
+    fetch(getTelemetryCompareUrl(wsUrl, compareCarA, compareCarB, compareSessionId))
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Comparison API returned ${response.status}`);
+        }
+        return response.json() as Promise<ComparisonPayload>;
+      })
+      .then((payload) => {
+        setComparisonPayload(payload);
+        setComparisonMessage(
+          payload.samples.length > 0
+            ? null
+            : `No aligned ${compareCarA}/${compareCarB} samples for session ${compareSessionId}`,
+        );
+      })
+      .catch(() => {
+        setComparisonPayload(emptyComparisonPayload);
+        setComparisonMessage(`No multi-car comparison data for ${compareCarA}/${compareCarB}`);
+      });
 
     const socket = new WebSocket(wsUrl);
     wsRef.current = socket;
@@ -275,11 +325,17 @@ export default function Dashboard() {
           />
 
           <StatusTicker
-            className={currentStatus?.Is_Anomaly && currentStatus?.explanation ? "xl:col-span-2" : "xl:col-span-4"}
+            className="xl:col-span-2"
             streams={sensorStreams}
             isAnomaly={Boolean(currentStatus?.Is_Anomaly)}
             anomalyDelta={anomalyDelta}
             lastSync={getConnectionAge(currentStatus)}
+          />
+
+          <ComparisonChart
+            className="xl:col-span-2"
+            payload={comparisonPayload ?? createEmptyComparisonPayload("schema-smoke", "VER", "HAM")}
+            emptyMessage={comparisonMessage ?? undefined}
           />
         </div>
       </section>

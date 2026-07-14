@@ -33,12 +33,15 @@ def execute_training_pipeline():
     print("\n[PHASE 1] Extracting data from FastF1 and running Cubic Spline alignment...")
     processor = F1TelemetryProcessor()
     # Profiled on Monza (high-braking circuit) using Verstappen's baseline telemetry stint
-    replay_df = processor.process_session_telemetry(
+    replay_frames = processor.process_session_telemetry(
         year=2023, 
         location="Monza", 
         session_type="R", 
-        driver="VER"
+        drivers=["VER"],
     )
+    if "VER" not in replay_frames:
+        raise RuntimeError("Unable to extract telemetry for driver VER")
+    replay_df = replay_frames["VER"]
     processed_df = processor.scale_features(replay_df)
     print(f"[DATA SUCCESS] Aligned Matrix Shape: {processed_df.shape}")
     
